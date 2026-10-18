@@ -32,6 +32,13 @@ Read it before changing extraction, chunking, eligibility or source-validation b
   separate eligible native blocks from partial page coverage in retrieval output.
 - Preserve exercise continuations and variation relationships when that feature is in scope.
   Retaining an image reference does not mean a text-only model understands the image.
+- For exercise catalogs, use the [private layout/review workflow](../exercise-catalogs.md).
+  Select explicit parent/continuation/variation regions and field boxes; use exact unique
+  quotes to split shared metadata lines. Never author replacement instructions. Default
+  incomplete records to partial; accept only exact reviewed revisions with no unresolved
+  recovery inside any boundary. Keep line-end hyphens unless each join is explicitly reviewed.
+  Associate only verified page/xref/image occurrences, not every photograph on a shared page.
+  Keep draft inspection/report content separate from eligible search evidence.
 - Flattened tables lose programme/day/exercise relationships. Verify grids, ordered pairs,
   quantities, units and timings against the source before trusting structured sessions.
 - Disclose contradictions with references to both claims; never silently rewrite them as OCR fixes.

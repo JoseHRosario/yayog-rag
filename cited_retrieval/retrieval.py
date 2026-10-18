@@ -76,11 +76,67 @@ def search(
             + (1 / (RRF_CONSTANT + sem_ranks[i]) if i in sem_ranks else 0.0)
             for i in candidates
         }
-        ranked = sorted(candidates, key=lambda i: (-fused[i], i))[:limit]
+        ranked = sorted(candidates, key=lambda i: (-fused[i], i))
+        ambiguous = []
+        exercise_coverage = []
+        if "exercises" in meta["report"]:
+            from .exercises import coverage_summary, named_candidates, validate_exercises
+
+            catalog_records = meta["report"]["exercises"]["records"]
+            # Resolve identity before eligibility. Withheld aliases can block
+            # unsafe routing, but never activate their instructions as evidence.
+            known = named_candidates(question, [{"exercise": r} for r in catalog_records])
+            if len(known) > 1:
+                ambiguous = [
+                    {
+                        "id": catalog_records[i]["id"],
+                        "name": catalog_records[i]["name"],
+                        "eligible": catalog_records[i]["eligible"],
+                        "state": catalog_records[i]["state"],
+                        "location": (
+                            catalog_records[i]["citations"]["name"][0]["location"]
+                            if catalog_records[i]["citations"]["name"]
+                            else None
+                        ),
+                    }
+                    for i in known
+                ]
+                ranked = []
+            elif known:
+                parent = catalog_records[known[0]]
+                nodes = [parent, *parent["variations"]]
+                matched_nodes = named_candidates(
+                    question, [{"exercise": {**node, "variations": []}} for node in nodes]
+                )
+                node_ids = {nodes[i]["id"] for i in matched_nodes}
+                matching = [
+                    i
+                    for i, record in enumerate(records)
+                    if json.loads(record[0])["exercise"]["id"] == parent["id"]
+                    and json.loads(record[0])["provenance"]["matched_node_id"] in node_ids
+                ]
+                # Retain relevance within the explicitly named node. Append
+                # matching windows as a fallback when semantic/lexical cutoffs
+                # exclude an exact accepted identity, never the parent's first
+                # unrelated window merely because it precedes the variation.
+                ranked = [i for i in ranked if i in matching] + [
+                    i for i in matching if i not in ranked
+                ]
+            validate_exercises(meta["report"]["exercises"])
+            exercise_coverage = coverage_summary(meta["report"]["exercises"]["records"])
+            seen: set[str] = set()
+            parents = []
+            for i in ranked:
+                parent_id = json.loads(records[i][0])["exercise"]["id"]
+                if parent_id not in seen:
+                    parents.append(i)
+                    seen.add(parent_id)
+            ranked = parents
+        ranked = ranked[:limit]
         passages = [
             {
                 **json.loads(records[i][0]),
-                "score": fused[i],
+                "score": fused.get(i, 0.0),
                 "semantic_score": float(scores[i]),
                 "lexical_rank": lex_ranks.get(i),
                 "semantic_rank": sem_ranks.get(i),
@@ -90,7 +146,9 @@ def search(
         if "recovery" in meta["report"]:
             _validate_recovery(meta["report"]["recovery"])
         return {
-            "status": "evidence" if passages else "no_evidence",
+            "status": "ambiguous" if ambiguous else "evidence" if passages else "no_evidence",
+            **({"candidates": ambiguous} if ambiguous else {}),
+            **({"exercise_coverage": exercise_coverage} if "exercises" in meta["report"] else {}),
             "passages": passages,
             "source_id": meta["report"]["sha256"],
             "model": meta["report"]["model"],
@@ -99,7 +157,16 @@ def search(
                     "coverage": {
                         "pages": meta["report"]["pages"],
                         "unresolved_regions": meta["report"]["recovery"]["unresolved_regions"],
-                        "gaps": meta["report"]["recovery"]["gaps"],
+                        "gaps": [
+                            {
+                                k: v
+                                for k, v in gap.items()
+                                if k in {"pdf_page", "bbox", "reason", "regions"}
+                            }
+                            for gap in meta["report"]["recovery"]["gaps"]
+                        ]
+                        if "exercises" in meta["report"]
+                        else meta["report"]["recovery"]["gaps"],
                         "warnings": meta["report"]["recovery"]["warnings"],
                     }
                 }

@@ -288,6 +288,7 @@ def ingest(
     *,
     approval: dict[str, Any] | None = None,
     recovery: str | Path | None = None,
+    exercises: str | Path | None = None,
 ) -> dict[str, Any]:
     """Rebuild atomically after explicit review of this artifact's selected pages."""
     path, target = Path(pdf).resolve(), Path(index).resolve()
@@ -315,15 +316,42 @@ def ingest(
             if start <= info["pdf_page"] <= end:
                 info["status"] = "candidate"
                 info["reason"] = None
-    passages = _passages(path, preview, recovered)
+    exercise_binding = None
+    if exercises is not None:
+        from .exercises import exercise_passages, inspect_exercises
+
+        catalog_path = Path(exercises).resolve()
+        if catalog_path == target:
+            raise ValueError("unsafe_index_path")
+        catalog_hash = _hash_file(catalog_path)
+        catalog = inspect_exercises(catalog_path)
+        binding = catalog["binding"]
+        if (
+            binding["source_sha256"] != preview["sha256"]
+            or binding["section"] != preview["section"]
+            or binding["recovery_sha256"] != recovery_hash
+        ):
+            raise ValueError("stale_exercises")
+        exercise_binding = {
+            "catalog_path": str(catalog_path),
+            "catalog_sha256": catalog_hash,
+            "records": catalog["records"],
+        }
+        passages = exercise_passages(catalog)
+    else:
+        passages = _passages(path, preview, recovered)
     if not passages:
         raise ValueError("no_eligible_passages")
     identity = dict(embedder.identity)
     if not all(identity.get(key) for key in ("model", "version", "artifact_sha256")):
         raise ValueError("invalid_model_identity")
-    vectors = _vectors(embedder, [p["text"] for p in passages])
+    vectors = _vectors(embedder, [p.get("retrieval_text", p["text"]) for p in passages])
     if identity != embedder.identity:
         raise ValueError("model_changed")
+    if exercise_binding is not None:
+        from .exercises import validate_exercises
+
+        validate_exercises(exercise_binding)
     if _hash_file(path) != preview["sha256"]:
         raise ValueError("source_changed")
     if recovery is not None:
@@ -333,13 +361,26 @@ def ingest(
         if _hash_file(Path(recovery)) != recovery_hash:
             raise ValueError("stale_recovery")
     imported_pages = {p["location"]["pdf_page"] for p in passages}
+    if exercise_binding is not None:
+        imported_pages = {
+            b["pdf_page"]
+            for r in exercise_binding["records"]
+            if r["eligible"]
+            for b in r["boundaries"]
+        }
+        for page in preview["pages"]:
+            if start <= page["pdf_page"] <= end:
+                page["status"] = "candidate"
+                page["reason"] = None
     for page in preview["pages"]:
         if page["status"] == "candidate":
             if page["pdf_page"] in imported_pages:
                 page["status"] = "imported"
             else:
                 page["status"] = "excluded"
-                page["reason"] = "no_eligible_prose"
+                page["reason"] = (
+                    "no_eligible_exercises" if exercise_binding is not None else "no_eligible_prose"
+                )
     result = {
         **preview,
         "passage_count": len(passages),
@@ -349,6 +390,16 @@ def ingest(
         "approval": approval,
     }
     records = [[_json(p), _json(v)] for p, v in zip(passages, vectors, strict=True)]
+    if exercise_binding is not None:
+        result["exercises"] = exercise_binding
+        for page in result["pages"]:
+            related = [
+                r
+                for r in exercise_binding["records"]
+                if any(b["pdf_page"] == page["pdf_page"] for b in r["boundaries"])
+            ]
+            if page["status"] == "imported" and any(not r["eligible"] for r in related):
+                page.update(status="partial", reason="excluded_exercises")
     if recovered is not None and recovery is not None:
         result["recovery"] = {
             "bundle_path": str(Path(recovery).resolve()),
@@ -388,7 +439,7 @@ def ingest(
             db.execute("CREATE VIRTUAL TABLE terms USING fts5(text)")
             db.executemany(
                 "INSERT INTO terms(rowid,text) VALUES (?,?)",
-                [(i, p["text"]) for i, p in enumerate(passages, 1)],
+                [(i, p.get("retrieval_text", p["text"])) for i, p in enumerate(passages, 1)],
             )
         os.chmod(temporary, 0o600)
         os.replace(temporary, target)
@@ -420,7 +471,11 @@ def _load(index: str | Path) -> tuple[sqlite3.Connection, dict[str, Any], list[l
         if _digest(_json(records).encode()) != meta["corpus_sha256"]:
             raise ValueError("stale_corpus")
         terms = list(db.execute("SELECT rowid,text FROM terms ORDER BY rowid"))
-        expected_terms = [(i, json.loads(r[0])["text"]) for i, r in enumerate(records, 1)]
+        expected_terms = [
+            (i, passage.get("retrieval_text", passage["text"]))
+            for i, (payload, _) in enumerate(records, 1)
+            for passage in [json.loads(payload)]
+        ]
         if terms != expected_terms:
             raise ValueError("stale_corpus")
         if meta["report"]["settings"] != SETTINGS:
@@ -433,6 +488,10 @@ def _load(index: str | Path) -> tuple[sqlite3.Connection, dict[str, Any], list[l
             raise ValueError("stale_source")
         if "recovery" in meta["report"]:
             _validate_recovery(meta["report"]["recovery"])
+        if "exercises" in meta["report"]:
+            from .exercises import validate_exercises
+
+            validate_exercises(meta["report"]["exercises"])
         return db, meta, records
     except BaseException:
         db.close()
