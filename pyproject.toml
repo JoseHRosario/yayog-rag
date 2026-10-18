@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cited-retrieval"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["pymupdf>=1.24", "numpy>=1.26", "fastembed>=0.7,<0.9"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "mypy>=1.10", "ruff>=0.9"]
+
+[project.scripts]
+cited = "cited_retrieval.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cited_retrieval*"]
+
+[tool.mypy]
+strict = true
+[[tool.mypy.overrides]]
+module = ["pymupdf.*", "fastembed.*"]
+ignore_missing_imports = true
+follow_untyped_imports = false
+
+[[tool.mypy.overrides]]
+module = "cited_retrieval.core"
+disable_error_code = ["no-untyped-call"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
