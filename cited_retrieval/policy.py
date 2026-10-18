@@ -1,6 +1,9 @@
 """Shared extraction/ranking policy, also serialized into index compatibility metadata."""
 
 CHUNK_CHARS = 1200
+OCR_DPI = 400
+OCR_PSM = 7
+OCR_CROP_PADDING = 1
 MIN_PROSE_WORDS = 5
 MIN_ALPHA_FRACTION = 0.5
 RRF_CONSTANT = 60

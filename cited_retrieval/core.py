@@ -7,7 +7,6 @@ import json
 import os
 import sqlite3
 import tempfile
-import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -18,13 +17,13 @@ from .embedder import Embedder
 from .policy import CHUNK_CHARS, MIN_ALPHA_FRACTION, MIN_PROSE_WORDS, ranking_settings
 
 SETTINGS = {
-    "schema": 2,
+    "schema": 3,
     "extractor": "pymupdf-blocks",
     "extractor_version": pymupdf.VersionBind,
     "chunk_chars": CHUNK_CHARS,
     "min_prose_words": MIN_PROSE_WORDS,
     "min_alpha_fraction": MIN_ALPHA_FRACTION,
-    "quality": "native-unicode-v2",
+    "quality": "raw-line-unicode-v5",
     "ranking": ranking_settings(),
 }
 
@@ -51,47 +50,32 @@ def _is_prose(text: str) -> bool:
 
 
 def _quality(page: Any, text: str) -> str | None:
-    # PDF base-14 fonts have a specified standard mapping without a ToUnicode stream.
-    base14 = {
-        "Helvetica",
-        "Helvetica-Bold",
-        "Helvetica-Oblique",
-        "Helvetica-BoldOblique",
-        "Times-Roman",
-        "Times-Bold",
-        "Times-Italic",
-        "Times-BoldItalic",
-        "Courier",
-        "Courier-Bold",
-        "Courier-Oblique",
-        "Courier-BoldOblique",
-    }
-    for font in page.get_fonts(full=True):
-        mapping = page.parent.xref_get_key(font[0], "ToUnicode")
-        standard_simple_encoding = font[2] in {"Type1", "TrueType"} and font[5] in {
-            "WinAnsiEncoding",
-            "MacRomanEncoding",
-        }
-        if mapping[0] == "null" and not (
-            standard_simple_encoding
-            or (
-                font[3] in base14
-                and font[1] == "n/a"
-                and font[5] in ("WinAnsiEncoding", "MacRomanEncoding", "")
-            )
-        ):
-            return "missing_unicode_map"
+    from .text_quality import (
+        invalid_characters,
+        line_has_unmapped_glyphs,
+        line_reason,
+        raw_line_text,
+        unmapped_fonts,
+    )
+
+    missing = unmapped_fonts(page)
+    if missing:
+        return "missing_unicode_map"
     if not text.strip():
         return "no_native_text"
-    if any(
-        unicodedata.category(c) in {"Cc", "Co", "Cs", "Cn"} and c not in "\n\r\t" or c == "\ufffd"
-        for c in text
-    ):
+    if invalid_characters(text):
         return "invalid_unicode"
-    # Missing character mappings must never silently become approved text.
-    for span in page.get_texttrace():
-        if any(c[0] in (0, 0xFFFD) for c in span["chars"]):
-            return "unmapped_glyphs"
+    trace = page.get_texttrace()
+    for block in page.get_text("dict")["blocks"]:
+        for line in block.get("lines", []):
+            reason = line_reason(
+                line,
+                missing,
+                raw_line_text(line, trace),
+                unmapped=line_has_unmapped_glyphs(page, line),
+            )
+            if reason:
+                return reason
     if not _is_prose(text):
         return "not_prose"
     return None
@@ -137,7 +121,9 @@ def inspect_source(pdf: str | Path, start: int, end: int) -> dict[str, Any]:
     }
 
 
-def _passages(pdf: Path, preview: dict[str, Any]) -> list[dict[str, Any]]:
+def _passages(
+    pdf: Path, preview: dict[str, Any], recovery: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     boundaries = sorted(preview["bookmarks"], key=lambda b: (b["pdf_page"], b["y"]))
     with pymupdf.open(pdf) as doc:
@@ -147,14 +133,57 @@ def _passages(pdf: Path, preview: dict[str, Any]) -> list[dict[str, Any]]:
             number = info["pdf_page"]
             page = doc[number - 1]
             chunks: list[tuple[list[str], list[float], str]] = []
-            for block in page.get_text("blocks", sort=True):
+            native_blocks = page.get_text("blocks", sort=True)
+            recovered_blocks = (
+                []
+                if recovery is None
+                else [b for b in recovery["blocks"] if b["pdf_page"] == number]
+            )
+            regions = {} if recovery is None else {r["id"]: r for r in recovery["regions"]}
+            eligible_blocks = []
+            for b in recovered_blocks:
+                if any(
+                    line["region_id"] and regions[line["region_id"]]["state"] != "accepted"
+                    for line in b["lines"]
+                ):
+                    continue
+                eligible_blocks.append(b)
+            selected_blocks = (
+                native_blocks
+                if recovery is None
+                else [
+                    (*b["bbox"], "\n".join(line["text"] for line in b["lines"]), i, 0)
+                    for i, b in enumerate(eligible_blocks)
+                ]
+            )
+            for block in selected_blocks:
                 if block[6] != 0 or not block[4].strip():
                     continue
                 if block[4].strip() in {b["title"] for b in boundaries}:
                     continue
                 # Split blocks at bookmark boundaries, including boundaries inside a page.
                 block_start = len(chunks)
-                lines = page.get_text("dict", clip=pymupdf.Rect(block[:4]))["blocks"]
+                lines = (
+                    page.get_text("dict", clip=pymupdf.Rect(block[:4]))["blocks"]
+                    if recovery is None
+                    else [
+                        {
+                            "lines": [
+                                {
+                                    "bbox": line["bbox"],
+                                    "spans": [
+                                        {
+                                            "text": regions[line["region_id"]]["ocr_text"]
+                                            if line["region_id"]
+                                            else line["text"]
+                                        }
+                                    ],
+                                }
+                                for line in eligible_blocks[block[5]]["lines"]
+                            ]
+                        }
+                    ]
+                )
                 for b in lines:
                     for line in b.get("lines", []):
                         text = "".join(s["text"] for s in line["spans"]).strip()
@@ -193,7 +222,23 @@ def _passages(pdf: Path, preview: dict[str, Any]) -> list[dict[str, Any]]:
                         else:
                             chunks.append((section_path, bbox, text))
             for ordinal, (section_path, bbox, text) in enumerate(chunks):
-                if not _is_prose(text):
+                used_regions = [
+                    r
+                    for r in regions.values()
+                    if r["pdf_page"] == number
+                    and r["state"] == "accepted"
+                    and pymupdf.Rect(r["bbox"]).intersects(pymupdf.Rect(bbox))
+                ]
+                if not _is_prose(text) and not used_regions:
+                    if recovery is not None:
+                        recovery["gaps"].append(
+                            {
+                                "pdf_page": number,
+                                "bbox": bbox,
+                                "reason": "excluded_non_prose",
+                                "text": text,
+                            }
+                        )
                     continue
                 location = {
                     "pdf_page": number,
@@ -210,9 +255,12 @@ def _passages(pdf: Path, preview: dict[str, Any]) -> list[dict[str, Any]]:
                         "passage_id": pid,
                         "text": text,
                         "location": location,
-                        "provenance": SETTINGS.copy(),
+                        "provenance": {
+                            **SETTINGS,
+                            **({"recovery_regions": used_regions} if used_regions else {}),
+                        },
                         "eligible": True,
-                        "review_status": "acknowledged",
+                        "review_status": "accepted" if used_regions else "acknowledged",
                     }
                 )
     return result
@@ -239,6 +287,7 @@ def ingest(
     embedder: Embedder,
     *,
     approval: dict[str, Any] | None = None,
+    recovery: str | Path | None = None,
 ) -> dict[str, Any]:
     """Rebuild atomically after explicit review of this artifact's selected pages."""
     path, target = Path(pdf).resolve(), Path(index).resolve()
@@ -247,7 +296,26 @@ def ingest(
     preview = inspect_source(path, start, end)
     if approval != {"sha256": preview["sha256"], "pages": list(range(start, end + 1))}:
         raise ValueError("review_required")
-    passages = _passages(path, preview)
+    recovered = None
+    recovery_hash = None
+    if recovery is not None:
+        from .recovery import inspect_review
+
+        recovery_path = Path(recovery).resolve()
+        if recovery_path == target:
+            raise ValueError("unsafe_index_path")
+        recovery_hash = _hash_file(recovery_path)
+        recovered = inspect_review(recovery_path)
+        if (
+            recovered["source_sha256"] != preview["sha256"]
+            or recovered["section"] != preview["section"]
+        ):
+            raise ValueError("stale_recovery")
+        for info in preview["pages"]:
+            if start <= info["pdf_page"] <= end:
+                info["status"] = "candidate"
+                info["reason"] = None
+    passages = _passages(path, preview, recovered)
     if not passages:
         raise ValueError("no_eligible_passages")
     identity = dict(embedder.identity)
@@ -258,6 +326,12 @@ def ingest(
         raise ValueError("model_changed")
     if _hash_file(path) != preview["sha256"]:
         raise ValueError("source_changed")
+    if recovery is not None:
+        from .recovery import load_bundle
+
+        load_bundle(Path(recovery).resolve())
+        if _hash_file(Path(recovery)) != recovery_hash:
+            raise ValueError("stale_recovery")
     imported_pages = {p["location"]["pdf_page"] for p in passages}
     for page in preview["pages"]:
         if page["status"] == "candidate":
@@ -275,6 +349,25 @@ def ingest(
         "approval": approval,
     }
     records = [[_json(p), _json(v)] for p, v in zip(passages, vectors, strict=True)]
+    if recovered is not None and recovery is not None:
+        result["recovery"] = {
+            "bundle_path": str(Path(recovery).resolve()),
+            "bundle_sha256": recovery_hash,
+            "unresolved_regions": recovered["unresolved_regions"],
+            "gaps": recovered["gaps"],
+            "warnings": recovered["warnings"],
+        }
+        for page in result["pages"]:
+            gaps = [
+                r
+                for r in recovered["regions"]
+                if r["pdf_page"] == page["pdf_page"] and r["state"] != "accepted"
+            ]
+            page["unresolved_regions"] = len(gaps)
+            page_gaps = [g for g in recovered["gaps"] if g["pdf_page"] == page["pdf_page"]]
+            if (gaps or page_gaps) and page["status"] == "imported":
+                page["status"] = "partial"
+                page["reason"] = "unresolved_recovery" if gaps else "excluded_content"
     result["corpus_sha256"] = _digest(_json(records).encode())
     meta = {
         "report": result,
@@ -304,6 +397,18 @@ def ingest(
     return result
 
 
+def _validate_recovery(binding: dict[str, Any]) -> None:
+    from .recovery import load_bundle
+
+    review_path = Path(binding["bundle_path"])
+    load_bundle(review_path)
+    try:
+        if _hash_file(review_path) != binding["bundle_sha256"]:
+            raise ValueError("stale_recovery")
+    except OSError:
+        raise ValueError("stale_recovery") from None
+
+
 def _load(index: str | Path) -> tuple[sqlite3.Connection, dict[str, Any], list[list[str]]]:
     db = sqlite3.connect(Path(index).resolve().as_uri() + "?mode=ro", uri=True)
     try:
@@ -326,6 +431,8 @@ def _load(index: str | Path) -> tuple[sqlite3.Connection, dict[str, Any], list[l
             raise ValueError("stale_source") from None
         if source_hash != meta["report"]["sha256"]:
             raise ValueError("stale_source")
+        if "recovery" in meta["report"]:
+            _validate_recovery(meta["report"]["recovery"])
         return db, meta, records
     except BaseException:
         db.close()

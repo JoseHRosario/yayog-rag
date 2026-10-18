@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from .core import _load, _vectors
+from .core import _load, _validate_recovery, _vectors
 from .embedder import Embedder
 from .policy import (
     CANDIDATE_LIMIT,
@@ -87,11 +87,25 @@ def search(
             }
             for i in ranked
         ]
+        if "recovery" in meta["report"]:
+            _validate_recovery(meta["report"]["recovery"])
         return {
             "status": "evidence" if passages else "no_evidence",
             "passages": passages,
             "source_id": meta["report"]["sha256"],
             "model": meta["report"]["model"],
+            **(
+                {
+                    "coverage": {
+                        "pages": meta["report"]["pages"],
+                        "unresolved_regions": meta["report"]["recovery"]["unresolved_regions"],
+                        "gaps": meta["report"]["recovery"]["gaps"],
+                        "warnings": meta["report"]["recovery"]["warnings"],
+                    }
+                }
+                if "recovery" in meta["report"]
+                else {}
+            ),
         }
     finally:
         db.close()

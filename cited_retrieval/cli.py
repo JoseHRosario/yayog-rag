@@ -10,7 +10,7 @@ from typing import Any
 
 import pymupdf
 
-from . import ingest, inspect_source, report, search
+from . import ingest, inspect_review, inspect_source, recover, report, review, search
 
 SAFE_ERRORS = {
     "invalid_section",
@@ -28,6 +28,15 @@ SAFE_ERRORS = {
     "incompatible_dimensions",
     "invalid_query",
     "model_unavailable",
+    "stale_recovery",
+    "unsafe_review_path",
+    "review_revision_mismatch",
+    "invalid_review_state",
+    "empty_recovery",
+    "invalid_ocr_settings",
+    "ocr_unavailable",
+    "ocr_failed",
+    "ocr_changed",
 }
 
 
@@ -36,11 +45,17 @@ def _parser() -> argparse.ArgumentParser:
         description="Import reviewed prose and retrieve cited evidence."
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    for command in ("inspect", "import"):
+    for command in ("inspect", "import", "recover"):
         sub = commands.add_parser(command)
         sub.add_argument("pdf")
         sub.add_argument("--start", type=int, required=True)
         sub.add_argument("--end", type=int, required=True)
+        if command == "recover":
+            sub.add_argument("--bundle", required=True)
+            sub.add_argument("--tesseract", default="tesseract")
+            sub.add_argument("--tessdata-dir")
+            sub.add_argument("--language", default="eng")
+            sub.add_argument("--timeout", type=float, default=60)
         if command == "import":
             sub.add_argument("--index", required=True)
             sub.add_argument("--approve-sha256", required=True)
@@ -48,6 +63,14 @@ def _parser() -> argparse.ArgumentParser:
                 "--approve-pages", required=True, help="Comma-separated PDF page numbers"
             )
             sub.add_argument("--model-dir", required=True)
+            sub.add_argument("--recovery", help="Private reviewed recovery bundle")
+    sub = commands.add_parser("inspect-review", aliases=["inspectreview"])
+    sub.add_argument("bundle")
+    sub = commands.add_parser("review")
+    sub.add_argument("bundle")
+    sub.add_argument("--region", required=True)
+    sub.add_argument("--revision", required=True)
+    sub.add_argument("--state", choices=["accepted", "rejected", "pending"], required=True)
     sub = commands.add_parser("report")
     sub.add_argument("--index", required=True)
     sub = commands.add_parser("search")
@@ -63,6 +86,20 @@ def _execute(args: argparse.Namespace) -> dict[str, Any]:
         return inspect_source(args.pdf, args.start, args.end)
     if args.command == "report":
         return report(args.index)
+    if args.command in {"inspect-review", "inspectreview"}:
+        return inspect_review(args.bundle)
+    if args.command == "review":
+        return review(args.bundle, args.region, args.revision, args.state)
+    if args.command == "recover":
+        from .tesseract_ocr import TesseractOCR
+
+        engine = TesseractOCR(
+            executable=args.tesseract,
+            tessdata=args.tessdata_dir,
+            language=args.language,
+            timeout=args.timeout,
+        )
+        return recover(args.pdf, args.bundle, args.start, args.end, engine)
     if args.command == "import":
         preview = inspect_source(args.pdf, args.start, args.end)
         approval = {
@@ -78,7 +115,15 @@ def _execute(args: argparse.Namespace) -> dict[str, Any]:
 
     embedder = LocalEmbedder(args.model_dir)
     if args.command == "import":
-        return ingest(args.pdf, args.index, args.start, args.end, embedder, approval=approval)
+        return ingest(
+            args.pdf,
+            args.index,
+            args.start,
+            args.end,
+            embedder,
+            approval=approval,
+            recovery=args.recovery,
+        )
     return search(args.index, args.question, embedder, limit=args.limit)
 
 
