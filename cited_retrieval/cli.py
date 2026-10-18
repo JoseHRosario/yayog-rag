@@ -6,13 +6,18 @@ import argparse
 import io
 import json
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from typing import Any
 
 import pymupdf
 
 from . import ingest, inspect_review, inspect_source, recover, report, review, search
+from .exercises import draft_exercises, inspect_exercises, review_exercise
 
 SAFE_ERRORS = {
+    "stale_exercises",
+    "invalid_exercise_layout",
+    "invalid_exercise_image",
     "invalid_section",
     "unsafe_index_path",
     "review_required",
@@ -45,6 +50,20 @@ def _parser() -> argparse.ArgumentParser:
         description="Import reviewed prose and retrieve cited evidence."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    sub = commands.add_parser("draft-exercises")
+    sub.add_argument("pdf")
+    sub.add_argument("--catalog", required=True)
+    sub.add_argument("--layout", required=True)
+    sub.add_argument("--start", type=int, required=True)
+    sub.add_argument("--end", type=int, required=True)
+    sub.add_argument("--recovery")
+    sub = commands.add_parser("inspect-exercises")
+    sub.add_argument("catalog")
+    sub = commands.add_parser("review-exercise")
+    sub.add_argument("catalog")
+    sub.add_argument("--record", required=True)
+    sub.add_argument("--revision", required=True)
+    sub.add_argument("--state", choices=["accepted", "rejected", "pending"], required=True)
     for command in ("inspect", "import", "recover"):
         sub = commands.add_parser(command)
         sub.add_argument("pdf")
@@ -64,6 +83,7 @@ def _parser() -> argparse.ArgumentParser:
             )
             sub.add_argument("--model-dir", required=True)
             sub.add_argument("--recovery", help="Private reviewed recovery bundle")
+            sub.add_argument("--exercises", help="Private reviewed exercise catalog")
     sub = commands.add_parser("inspect-review", aliases=["inspectreview"])
     sub.add_argument("bundle")
     sub = commands.add_parser("review")
@@ -82,6 +102,19 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _execute(args: argparse.Namespace) -> dict[str, Any]:
+    if args.command == "draft-exercises":
+        return draft_exercises(
+            args.pdf,
+            args.catalog,
+            json.loads(Path(args.layout).read_text()),
+            args.start,
+            args.end,
+            recovery=args.recovery,
+        )
+    if args.command == "inspect-exercises":
+        return inspect_exercises(args.catalog)
+    if args.command == "review-exercise":
+        return review_exercise(args.catalog, args.record, args.revision, args.state)
     if args.command == "inspect":
         return inspect_source(args.pdf, args.start, args.end)
     if args.command == "report":
@@ -123,6 +156,7 @@ def _execute(args: argparse.Namespace) -> dict[str, Any]:
             embedder,
             approval=approval,
             recovery=args.recovery,
+            exercises=args.exercises,
         )
     return search(args.index, args.question, embedder, limit=args.limit)
 

@@ -2,8 +2,11 @@
 
 Import a **manually reviewed prose section** from a local PDF and retrieve supporting
 passages. Damaged text lines can be recovered with local targeted OCR and explicitly
-accepted against rendered crops. This returns evidence, not generated advice. Structured
-exercise parsing, schedules, answer generation, hosted databases, and UI are not included.
+accepted against rendered crops. Reviewed exercise catalogs can preserve complete movement
+context using operator-supplied boundaries and source-backed field selectors. This returns
+evidence, not generated advice. Schedules, answer generation, hosted databases and UI are
+not included. See [Exercise catalogs](docs/exercise-catalogs.md) for the private layout schema
+and draft/review/import commands.
 
 ## Install and private storage
 
@@ -240,7 +243,8 @@ Native short/non-prose chunks (fewer than five words or less than half alphabeti
 are excluded, which removes common page labels and decorative rules. Accepted recovered
 blocks bypass this length filter; recovery-backed reports explicitly list other exclusions.
 This conservative native-prose policy can also exclude brief legitimate text; review the chosen section.
-Complex layouts can require exclusion during human review; this is a prose-only slice.
+Complex layouts can require exclusion during human review in native prose mode. Exercise
+mode instead requires an explicit reviewed catalog as described above.
 
 Every query/report rehashes the recorded source and verifies manifest, corpus, lexical
 content and settings. Queries also verify the exact model identity/dimensions. Removed or
