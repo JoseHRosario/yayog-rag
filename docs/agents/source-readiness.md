@@ -24,6 +24,12 @@ Read it before changing extraction, chunking, eligibility or source-validation b
   a document-wide offset. Preserve stable source/record IDs and the source fingerprint.
 - Keep unresolved passages ineligible. Review must be bound to the actual source artifact;
   heuristic checks are not independent content verification.
+- Bind OCR decisions to the source, crop, verbatim OCR and processing revision. Preserve
+  prior decisions as history, not transferable approval. Revalidate review bundles and crops
+  on every query/report; changing a review decision invalidates an existing index until rebuild.
+- Withhold a complete mixed paragraph block while any damaged line is unresolved, rather
+  than returning an apparently complete instruction with its warning omitted. Distinguish
+  separate eligible native blocks from partial page coverage in retrieval output.
 - Preserve exercise continuations and variation relationships when that feature is in scope.
   Retaining an image reference does not mean a text-only model understands the image.
 - Flattened tables lose programme/day/exercise relationships. Verify grids, ordered pairs,
