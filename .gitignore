@@ -1,0 +1,26 @@
+# Private sources and derived content remain local.
+*.pdf
+/data/
+/artifacts/
+/models/
+.local/
+.worktrees/
+.venv/
+__pycache__/
+*.py[cod]
+*.sqlite*
+*.db
+*.onnx
+*.npy
+*.npz
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
