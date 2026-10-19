@@ -169,7 +169,13 @@ Exercise mode never indexes ordinary raw-page snippets alongside records. Only a
 complete, gap-free parent records enter the index; none eligible fails explicitly and
 preserves the previous index. Each parent's own fields and each variation receive separate
 bounded lexical/semantic matching windows, so a late variation is not lost to the embedding
-model's context limit. `passage_count` counts these windows, not exercise records. Results
+model's context limit. Each node's `references` are chunked separately from its own fields
+and aliases: shared category guidance cannot fill or dilute an instruction window, and
+remains independently searchable. Field/selector ordering is retained within each stream;
+no generated labels or replacement source text are added. Reference matches still use the
+matched node's own first-instruction anchor, while each reference citation retains its exact
+source location. Reference prose is context, not an inferred per-exercise scalar attribute
+such as difficulty. `passage_count` counts these windows, not exercise records. Results
 are deduplicated by parent before applying the result limit. A match returns the whole parent
 in `passages[].exercise`, including all instruction segments, warnings, references, children
 and image references. `text` retains the complete source-backed parent/variation context
@@ -205,6 +211,25 @@ catalog review is required solely for this migration. Native-prose and programme
 have no new marker requirement or global settings change. Programme dependencies bind to
 reviewed exercise catalogs, not exercise indexes, so this migration does not require their
 rebuild. Existing source/recovery/catalog/model trust checks still apply.
+
+## Matching-window index migration
+
+Exercise imports also record `exercises.matching_window_version: 1`. Report/search reject
+exercise indexes with a missing, different or non-integer marker (`true` and `1.0` are not
+integer versions) as `stale_settings`. Rebuild only the exercise index using the same
+approved inputs and existing reviewed catalog; old mixed instruction/reference vectors
+must not be silently reused. `instruction_anchor_version` remains 1, and neither catalog
+`VERSION` nor global retrieval settings change. Prose/programme indexes and their catalog
+dependencies require no migration for this policy.
+
+This migration changes matching windows, their count, vectors and potentially passage IDs
+for nodes with references. Record IDs/revisions, accepted review histories, complete
+returned `text`/`exercise`, all source citations and node-own instruction anchors are
+preserved. Nodes without references retain their existing matching text and passage IDs.
+Repeated rebuilds with identical inputs remain stable. Separating every reference (not
+just category introductions) keeps previous reference text searchable without mixing it
+into the primary instruction vector. No similarity threshold, fusion, model, byte/result
+limit or query-specific routing change is involved.
 
 Private acceptance should separately compare representative multi-page exercises, adjacent
 same-page movements, harder/easier children, shared-line metadata, hyphens and explicitly

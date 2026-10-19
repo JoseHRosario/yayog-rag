@@ -30,8 +30,9 @@ FIELDS = {
     "chapter",
 }
 SCALARS = {"name", "category", "muscles", "difficulty", "chapter"}
-# Index-only policy: changing anchors does not invalidate catalog extraction/reviews.
+# Index-only policies do not invalidate catalog extraction/reviews.
 INSTRUCTION_ANCHOR_VERSION = 1
+MATCHING_WINDOW_VERSION = 1
 VERSION = {"version": 1, "pymupdf": pymupdf.VersionBind, "retrieval_chunk_chars": CHUNK_CHARS}
 _rect_factory: Any = pymupdf.Rect
 _open_document: Any = pymupdf.open
@@ -473,19 +474,33 @@ def exercise_passages(catalog: dict[str, Any]) -> list[dict[str, Any]]:
                 segment["text"] for segments in node["citations"].values() for segment in segments
             )
         for node in [record, *record["variations"]]:
-            node_text = "\n\n".join(
-                [*node["aliases"]]
-                + [s["text"] for segments in node["citations"].values() for s in segments]
-            )
-            windows = textwrap.wrap(
-                node_text,
-                width=CHUNK_CHARS,
-                replace_whitespace=False,
-                expand_tabs=False,
-                drop_whitespace=False,
-                break_long_words=False,
-                break_on_hyphens=False,
-            )
+            # Shared reference prose remains searchable, but must not dilute the
+            # node's own identity/instruction vector or move its chunk boundaries.
+            matching_texts = [
+                "\n\n".join(
+                    [*node["aliases"]]
+                    + [
+                        segment["text"]
+                        for field, segments in node["citations"].items()
+                        if field != "references"
+                        for segment in segments
+                    ]
+                ),
+                "\n\n".join(segment["text"] for segment in node["citations"]["references"]),
+            ]
+            windows = [
+                window
+                for matching_text in matching_texts
+                for window in textwrap.wrap(
+                    matching_text,
+                    width=CHUNK_CHARS,
+                    replace_whitespace=False,
+                    expand_tabs=False,
+                    drop_whitespace=False,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            ]
             for number, window in enumerate(windows):
                 passages.append(
                     {

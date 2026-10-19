@@ -223,6 +223,7 @@ def test_anchor_policy_is_not_required_for_prose_or_programme_indexes(tmp_path: 
     programme_report = report(programme_index)
     assert "exercises" not in programme_report
     assert "instruction_anchor_version" not in programme_report["programmes"]
+    assert "matching_window_version" not in programme_report["programmes"]
     result = search(
         programme_index,
         "Cloud programme",
