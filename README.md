@@ -5,10 +5,13 @@ passages. Damaged text lines can be recovered with local targeted OCR and explic
 accepted against rendered crops. Reviewed exercise catalogs can preserve complete movement
 context using operator-supplied boundaries and source-backed field selectors. Reviewed
 programme sessions preserve schedule cells, exact week/day scope, pair order, timings,
-supporting references and source conflicts. This returns evidence, not generated advice.
-Answer generation, whole-book coverage, hosted databases and UI are not included.
+supporting references and source conflicts. Search returns evidence; optional grounded
+answers use an explicitly authorized existing OpenAI-compatible inference endpoint.
+Whole-book coverage, hosted databases and UI are not included.
 See [Exercise catalogs](docs/exercise-catalogs.md) and
 [Programme sessions](docs/programme-sessions.md) for private layout schemas and commands.
+See [Grounded answers](docs/grounded-answers.md) for `answer`, `prepare-answer`,
+`finish-answer`, and the portable owner-run Windows client (standard library only).
 
 ## Install and private storage
 
@@ -30,7 +33,8 @@ fixtures belong in tests; tests create their PDFs in the temporary directory.
 The CLI emits safe JSON errors with exit status 2, without raw exceptions, source paths,
 or provider logs. Successful `inspect`/`report` output includes private metadata such as
 bookmarks. **Successful `search`, `recover`, `inspect-review`, and `review` stdout contains
-private source or recovered text.**
+private source or recovered text.** Answer/prepare/finish results (including error
+disclosures) and all answer bundles/response files are private source-derived data too.
 Use a private shell/output destination; never capture live retrieval output in CI logs.
 The Python API propagates exceptions for callers to handle and is not a logging boundary.
 
