@@ -147,7 +147,19 @@ def test_staged_packet_has_no_linux_dependencies_and_binds_response(tmp_path: Pa
 
 
 @pytest.mark.parametrize(
-    "text", ["Rest [E2].", "Rest.", "Rest [e1].", "Rest [E0].", "Rest [E1] [999]."]
+    "text",
+    [
+        "Rest [E2].",
+        "Rest.",
+        "Rest [e1].",
+        "Rest [E0].",
+        "Rest [E1] [999].",
+        "Rest (bbox [1, 2, 3, 4]) [E99].",
+        "Rest (bbox [1, 2, E99, 4]) [E1].",
+        "Rest (bbox [1, 2, 3]) [E1].",
+        "Rest (bbox [1, 2, 3, 4]) [e1].",
+        "Rest (bbox [1, 2, 3, 4]) [E1] [999].",
+    ],
 )
 def test_answer_rejects_unsupplied_or_missing_citations(tmp_path: Path, text: str):
     from cited_retrieval import answer
@@ -186,6 +198,51 @@ def test_answer_rejects_unsupplied_or_missing_citations(tmp_path: Path, text: st
     assert result["phase"] == "validation"
     assert "answer" not in result
     assert (Path(result["bundle"]) / "response.json").exists()
+
+
+@pytest.mark.parametrize(
+    "coordinates",
+    ["bbox [1, 2, 3, 4]", "bbox: [-1.5, 2.25, 30.0, 40.0]"],
+)
+def test_answer_accepts_coordinate_data_beside_valid_citations(tmp_path: Path, coordinates: str):
+    from cited_retrieval import answer
+    from cited_retrieval.openai_completion import OpenAICompletion
+
+    _, index = make_index(tmp_path)
+    text = f"Rest and sleep support recovery ({coordinates}) [E1]."
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": [{"id": "authored-model"}]})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": json.dumps({"status": "answer", "answer": text})},
+                    }
+                ]
+            },
+        )
+
+    result = answer(
+        index,
+        "recovery",
+        AuthoredEmbedder(),
+        provider=OpenAICompletion(
+            "http://127.0.0.1:8899/v1",
+            "authored-model",
+            connection_authorized=True,
+            transport=httpx.MockTransport(respond),
+        ),
+        output_dir=tmp_path / "bundle",
+    )
+    assert result["status"] == "answer"
+    assert result["answer"] == text
+    assert result["citations"] == ["E1"]
+    # Coordinate prose is not a citation, nor does accepting it verify its factual accuracy.
+    assert result["claim_support_verified"] is False
 
 
 @pytest.mark.parametrize(

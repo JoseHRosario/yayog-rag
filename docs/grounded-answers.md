@@ -127,7 +127,9 @@ must equal the configured advertised ID; if absent, `response_model` is null.
 Malformed/truncated output is rejected, never repaired into a plausible answer.
 
 Every non-abstaining answer needs supplied `[E1]`-style citations. Unknown IDs,
-missing citations and other square-bracket references are rejected. IDs map back to
+missing citations and other square-bracket references are rejected. A labelled
+`bbox` array of exactly four signed integer/decimal coordinates is location prose,
+not a citation; accepting its syntax does not verify its accuracy. IDs map back to
 full evidence in `request.json`. **Membership/syntax is not claim entailment**:
 `claim_support_verified` is always false. Human source/answer comparison is still
 required. Conflicts (with both source claims), unresolved references, page coverage
@@ -158,7 +160,15 @@ response binding, retrieval and post-inference revalidation. CLI error exit is 2
 
 Offline authored tests exercise trusted retrieval → HTTP request → response → current
 source revalidation through public answer/prepare/finish interfaces. HTTP transport
-responses are synthetic and are **not** live-model acceptance. A Windows owner must
-run the exported real-source request and return the actual response; until finish
-and private human comparison succeed, real inference/grounding acceptance remains
-owner-action-gated and incomplete. No network/server/credential is required by tests.
+responses are synthetic and are **not** live-model acceptance. Real acceptance needs
+an actual owner-returned response or an authorized integrated run, followed by
+finish validation and private human source comparison. Without either execution
+route, real inference acceptance remains owner-action-gated and incomplete.
+No network/server/credential is required by ordinary tests.
+
+For reasoning models, the completion allowance can be consumed before a final
+answer appears. A `length` finish remains a failed protocol result even if the raw
+response contains reasoning. Increase `--max-tokens` explicitly for a fresh attempt
+(for example, 4096), retain the original failed run, and compare the actual final
+answer with the source. Do not silently truncate evidence or disable reasoning to
+manufacture a successful test.

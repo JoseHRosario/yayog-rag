@@ -115,8 +115,17 @@ def _validate_response(raw: dict[str, Any], model: str, ids: set[str]) -> dict[s
         raise ValueError("inference_protocol") from None
     text = result["answer"]
     citations = sorted(set(re.findall(r"\[(E[1-9][0-9]*)\]", text)))
+    # A labelled four-number bbox is source-location prose, not a citation.
+    # This checks syntax only, not whether the coordinates support the claim.
+    number = r"-?[0-9]+(?:\.[0-9]+)?"
+    remaining = re.sub(
+        rf"\bbbox\s*:?\s*\[\s*{number}(?:\s*,\s*{number}){{3}}\s*\]",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
     # Reject malformed E-style references as well as valid-looking unknown IDs.
-    remaining = re.sub(r"\[E[1-9][0-9]*\]", "", text)
+    remaining = re.sub(r"\[E[1-9][0-9]*\]", "", remaining)
     if (
         any(c not in ids for c in citations)
         or "[" in remaining
