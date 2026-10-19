@@ -199,6 +199,24 @@ def search(
             }
             for i in ranked
         ]
+        # Expand only from the already validated, eligible prose corpus. Never
+        # extract fresh page text or cross into structured catalog siblings.
+        page_context: list[dict[str, Any]] = []
+        prose = "exercises" not in meta["report"] and "programmes" not in meta["report"]
+        if prose:
+            pages = {p["location"]["pdf_page"] for p in passages}
+            matched_ids = {p["passage_id"] for p in passages}
+            page_context = sorted(
+                (
+                    p
+                    for record in records
+                    for p in [json.loads(record[0])]
+                    if p["eligible"]
+                    and p["location"]["pdf_page"] in pages
+                    and p["passage_id"] not in matched_ids
+                ),
+                key=lambda p: (p["location"]["pdf_page"], p["location"]["ordinal"]),
+            )
         if "recovery" in meta["report"]:
             _validate_recovery(meta["report"]["recovery"])
         # Revalidate the complete dependency graph after inference, including source changes.
@@ -209,6 +227,11 @@ def search(
             **({"candidates": ambiguous} if ambiguous else {}),
             **({"exercise_coverage": exercise_coverage} if "exercises" in meta["report"] else {}),
             "passages": passages,
+            **(
+                {"page_context": page_context, "context_scope": "eligible_indexed_same_page_prose"}
+                if prose
+                else {}
+            ),
             "source_id": meta["report"]["sha256"],
             "model": meta["report"]["model"],
             **(

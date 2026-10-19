@@ -345,7 +345,7 @@ def ingest(
         }
         passages = programme_passages(catalog)
     elif exercises is not None:
-        from .exercises import exercise_passages, inspect_exercises
+        from .exercises import INSTRUCTION_ANCHOR_VERSION, exercise_passages, inspect_exercises
 
         catalog_path = Path(exercises).resolve()
         if catalog_path == target:
@@ -360,6 +360,7 @@ def ingest(
         ):
             raise ValueError("stale_exercises")
         exercise_binding = {
+            "instruction_anchor_version": INSTRUCTION_ANCHOR_VERSION,
             "catalog_path": str(catalog_path),
             "catalog_sha256": catalog_hash,
             "records": catalog["records"],
@@ -551,8 +552,11 @@ def _load(index: str | Path) -> tuple[sqlite3.Connection, dict[str, Any], list[l
         if "recovery" in meta["report"]:
             _validate_recovery(meta["report"]["recovery"])
         if "exercises" in meta["report"]:
-            from .exercises import validate_exercises
+            from .exercises import INSTRUCTION_ANCHOR_VERSION, validate_exercises
 
+            anchor_version = meta["report"]["exercises"].get("instruction_anchor_version")
+            if type(anchor_version) is not int or anchor_version != INSTRUCTION_ANCHOR_VERSION:
+                raise ValueError("stale_settings")
             validate_exercises(meta["report"]["exercises"])
         if "programmes" in meta["report"]:
             from .programmes import validate_programmes

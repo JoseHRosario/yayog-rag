@@ -7,7 +7,10 @@ context using operator-supplied boundaries and source-backed field selectors. Re
 programme sessions preserve schedule cells, exact week/day scope, pair order, timings,
 supporting references and source conflicts. Search returns evidence; optional grounded
 answers use an explicitly authorized existing OpenAI-compatible inference endpoint.
-Whole-book coverage, hosted databases and UI are not included.
+Full-source operator accounting is available through
+[Coverage and acceptance](docs/full-source-coverage.md); this does not establish
+whole-source semantic correctness or real-model acceptance. Hosted databases and UI
+are not included.
 See [Exercise catalogs](docs/exercise-catalogs.md) and
 [Programme sessions](docs/programme-sessions.md) for private layout schemas and commands.
 See [Grounded answers](docs/grounded-answers.md) for `answer`, `prepare-answer`,

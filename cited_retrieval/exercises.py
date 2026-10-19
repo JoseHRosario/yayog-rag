@@ -14,6 +14,7 @@ from typing import Any
 import pymupdf
 
 from .core import _digest, _hash_file, _json, inspect_source
+from .derivation_cache import memoize_derivation
 from .policy import CHUNK_CHARS
 from .recovery import _atomic_json, inspect_review
 from .text_quality import line_has_unmapped_glyphs, line_reason, raw_line_text, unmapped_fonts
@@ -29,6 +30,8 @@ FIELDS = {
     "chapter",
 }
 SCALARS = {"name", "category", "muscles", "difficulty", "chapter"}
+# Index-only policy: changing anchors does not invalidate catalog extraction/reviews.
+INSTRUCTION_ANCHOR_VERSION = 1
 VERSION = {"version": 1, "pymupdf": pymupdf.VersionBind, "retrieval_chunk_chars": CHUNK_CHARS}
 _rect_factory: Any = pymupdf.Rect
 _open_document: Any = pymupdf.open
@@ -51,6 +54,7 @@ def _inside_boundaries(page: int, box: Any, boundaries: list[dict[str, Any]]) ->
     )
 
 
+@memoize_derivation(lambda: (VERSION, pymupdf.VersionFitz))
 def _derive(
     source: Path,
     layout: dict[str, Any],
@@ -70,6 +74,9 @@ def _derive(
                 raise ValueError("invalid_exercise_layout")
             for boundary in boundaries:
                 _rect(boundary, doc, start, end)
+            from .blank_source_exclusions import verify_blank_exclusions
+
+            blank_proofs, ignored_gaps = verify_blank_exclusions(doc, spec, recovered, fingerprint)
             gaps: list[Any] = []
             if spec.get("coverage", "partial") != "complete":
                 gaps.append("unverified_completeness")
@@ -79,7 +86,9 @@ def _derive(
                 page = doc[boundary["pdf_page"] - 1]
                 box = _rect(boundary, doc, start, end)
                 if recovered is not None:
-                    for gap in recovered["gaps"]:
+                    for gap_index, gap in enumerate(recovered["gaps"]):
+                        if gap_index in ignored_gaps:
+                            continue
                         if gap["pdf_page"] == boundary["pdf_page"] and (
                             "bbox" not in gap or box.intersects(_rect_factory(gap["bbox"]))
                         ):
@@ -250,8 +259,21 @@ def _derive(
                     box = _rect(image, doc, start, end)
                     if not _inside_boundaries(number, box, boundaries):
                         raise ValueError("invalid_exercise_layout")
-                    if xref not in {i[0] for i in doc[number - 1].get_images(full=True)} or not any(
-                        list(rect) == list(box) for rect in doc[number - 1].get_image_rects(xref)
+                    page = doc[number - 1]
+                    placement = box
+                    if "placement_bbox" in image:
+                        placement = _rect_factory(image["placement_bbox"])
+                        # Only natural page-edge clipping is opt-in. Keep the visible
+                        # selector subject to ordinary page and node-boundary checks.
+                        if (
+                            placement.is_empty
+                            or placement.is_infinite
+                            or page.rect.contains(placement)
+                            or list(placement & page.rect) != list(box)
+                        ):
+                            raise ValueError("invalid_exercise_image")
+                    if xref not in {i[0] for i in page.get_images(full=True)} or not any(
+                        list(rect) == list(placement) for rect in page.get_image_rects(xref)
                     ):
                         raise ValueError("invalid_exercise_image")
                     images.append(
@@ -260,6 +282,11 @@ def _derive(
                             "pdf_page": number,
                             "xref": xref,
                             "bbox": list(box),
+                            **(
+                                {"placement_bbox": list(placement)}
+                                if "placement_bbox" in image
+                                else {}
+                            ),
                             "visual_understanding": False,
                         }
                     )
@@ -267,6 +294,8 @@ def _derive(
                 return result
 
             record = derive_node(spec, require_name=True)
+            if blank_proofs:
+                record["blank_source_exclusions"] = blank_proofs
             record["variations"] = []
             for child in spec.get("variations", []):
                 if child["relation"] not in {"easier", "harder", "alternative", "unspecified"}:
@@ -393,6 +422,15 @@ def inspect_exercises(catalog: str | Path) -> dict[str, Any]:
             for r, stored in zip(derived, value["records"], strict=True)
         ):
             raise ValueError("stale_exercises")
+        if _hash_file(Path(b["source_path"])) != b["source_sha256"]:
+            raise ValueError("stale_exercises")
+        if b["recovery_path"] and (
+            inspect_review(b["recovery_path"]) != recovered
+            or _hash_file(Path(b["recovery_path"])) != b["recovery_sha256"]
+        ):
+            raise ValueError("stale_exercises")
+        if _read(Path(catalog)) != value:
+            raise ValueError("stale_exercises")
     except OSError:
         raise ValueError("stale_exercises") from None
     for record in value["records"]:
@@ -459,9 +497,8 @@ def exercise_passages(catalog: dict[str, Any]) -> list[dict[str, Any]]:
                         # represents a late instruction or a child variation.
                         "text": "\n\n".join(texts),
                         "retrieval_text": window,
-                        "location": (
-                            node["citations"]["name"] or node["citations"]["instructions"]
-                        )[0]["location"],
+                        # Identity headings may live in navigation rather than the body.
+                        "location": node["citations"]["instructions"][0]["location"],
                         "exercise": record,
                         "eligible": True,
                         "review_status": "accepted",

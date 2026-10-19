@@ -13,11 +13,17 @@ import pymupdf
 
 from . import ingest, inspect_review, inspect_source, recover, report, review, search
 from .answers import answer, finish_answer, prepare_answer
+from .coverage import draft_coverage, inspect_coverage
 from .exercises import draft_exercises, inspect_exercises, review_exercise
 from .openai_completion import OpenAICompletion
 from .programmes import draft_programmes, inspect_programmes, review_programme
 
 SAFE_ERRORS = {
+    "unsafe_coverage_path",
+    "stale_coverage",
+    "invalid_coverage_manifest",
+    "invalid_evaluation_location",
+    "stale_coverage_evidence",
     "unsafe_answer_path",
     "invalid_inference_config",
     "connection_not_authorized",
@@ -59,6 +65,27 @@ def _parser() -> argparse.ArgumentParser:
         description="Import reviewed prose and retrieve cited evidence."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    sub = commands.add_parser(
+        "draft-coverage", help="Draft private source-bound coverage accounting"
+    )
+    sub.add_argument("pdf")
+    sub.add_argument(
+        "--audit", required=True, help="New private JSON path outside every Git checkout"
+    )
+    sub.add_argument(
+        "--inventory",
+        help="Private source-bound manual-record JSON; changes require a new draft and reconciliation",
+    )
+    sub.add_argument("--index", action="append", default=[])
+    sub.add_argument("--exercise-catalog", action="append", default=[])
+    sub.add_argument("--programme-catalog", action="append", default=[])
+    sub.add_argument("--recovery", action="append", default=[])
+    sub = commands.add_parser(
+        "inspect-coverage", help="Revalidate private coverage and registered inventory"
+    )
+    sub.add_argument(
+        "audit", help="Private manifest outside every Git checkout, including after relocation"
+    )
     sub = commands.add_parser("draft-exercises")
     sub.add_argument("pdf")
     sub.add_argument("--catalog", required=True)
@@ -154,6 +181,18 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _execute(args: argparse.Namespace) -> dict[str, Any]:
+    if args.command == "draft-coverage":
+        return draft_coverage(
+            args.pdf,
+            args.audit,
+            indexes=args.index,
+            exercise_catalogs=args.exercise_catalog,
+            programme_catalogs=args.programme_catalog,
+            recovery_bundles=args.recovery,
+            inventory=args.inventory,
+        )
+    if args.command == "inspect-coverage":
+        return inspect_coverage(args.audit)
     if args.command == "finish-answer":
         return finish_answer(args.index, args.request_dir, args.response)
     provider = None

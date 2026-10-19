@@ -45,7 +45,8 @@ continuations, warnings, references, and variations), `fields`, and optional `al
 ```
 
 - Page numbers are one-based physical PDF pages; boxes use PDF points in PyMuPDF page
-  coordinates. Every box must be nonempty and contained by the page. Every field/image
+  coordinates. Every boundary, field box and visible image box must be nonempty and
+  contained by the page. Every field/image
   selector must be inside a declared parent boundary on that page. Boundaries must stop
   before an unrelated next movement; select every continuation explicitly. Variations
   belong only to their declared parent, with separately selected fields. A child's optional
@@ -90,6 +91,20 @@ continuations, warnings, references, and variations), `fields`, and optional `al
   Returned refs include source SHA-256, page, xref, bbox and `visual_understanding: false`;
   they associate an original photograph location, not its visual meaning. Vector drawings
   are not fabricated as image xrefs; original page/region citations remain available.
+  For a source occurrence naturally extending beyond the page, opt in explicitly:
+  `{"pdf_page": 1, "xref": 12, "bbox": [0,240,80,340], "placement_bbox": [-20,240,80,340]}`.
+  `placement_bbox` must exactly equal one original `page.get_image_rects(xref)` occurrence
+  of an image listed on that page; `bbox` must exactly equal that **same occurrence's**
+  intersection with `page.rect`. The visible intersection must remain nonempty and wholly
+  owned by the node's boundaries. This mode is only for off-page placements, not ordinary
+  in-page images, arbitrary crops, approximate coordinates or swapped repeated-xref
+  occurrences. Both visible `bbox` and full `placement_bbox` are retained in derived image
+  provenance and bound to the reviewed revision. This describes page-edge clipping only,
+  not arbitrary PDF clipping paths or visual/form understanding. Omitting `placement_bbox`
+  retains the existing exact in-page occurrence semantics and output unchanged; no inferred
+  clipping or extra provenance is added. Settings remain version 1: this is additive opt-in,
+  not a reinterpretation of existing selectors. Older readers cannot validate catalogs
+  derived in this mode; use the supporting reader to draft, review, import and query them.
 - Coverage defaults to `partial`. Set `coverage: "complete"` **only after** comparison with
   original pages verifies all relevant instructions, warnings, cross-references and
   variations. Optional `gaps` is an array of operator gap codes; any gap withholds the whole
@@ -97,6 +112,26 @@ continuations, warnings, references, and variations), `fields`, and optional `al
   OCR anywhere inside a declared boundary. Selecting a readable fragment cannot bypass a
   damaged warning elsewhere in that boundary. Operators must still identify boundaries
   correctly: coordinates and hashes are not independent semantic review.
+
+## Verified blank recovery exclusions
+
+A parent or variation may opt in with `"blank_source_exclusions": [{"region_id":
+"EXACT_REGION_ID", "revision": "EXACT_CURRENT_REVISION"}]`. This is not OCR approval:
+the current sealed recovery/source must validate, the region's **original unpadded**
+rectangle must be inside the declaring node and parent, and an original-source RGB render
+at 400 DPI must contain only white pixels. No field selector anywhere in that parent or
+its variations may select a line referencing the excluded region, even with `quote`.
+Malformed, stale, selected, out-of-bound or nonwhite exclusions reject drafting. Only
+recovery-generated `unresolved_block` gaps whose **every unresolved region** passes these
+checks are exempted; generic/page-wide gaps and any other unresolved region still withhold
+the whole parent. Original bbox/page, source hash, region ID/revision, renderer settings
+and PNG render SHA-256 are retained in the parent's `blank_source_exclusions` provenance
+and exact reviewed revision. Recovery remains pending/rejected as before; padded-crop OCR
+fringe is never accepted or substituted. This does not affect ordinary prose eligibility.
+Without opt-in there are no output or revision changes, and catalog settings remain
+version 1. Older readers cannot validate a catalog derived with these proofs; use a
+supporting reader for drafting, review, import and querying. Pixel blankness proves only
+non-content in the declared rectangle, not semantic completeness of the parent.
 
 ## Draft, inspect, review, import
 
@@ -139,8 +174,10 @@ are deduplicated by parent before applying the result limit. A match returns the
 in `passages[].exercise`, including all instruction segments, warnings, references, children
 and image references. `text` retains the complete source-backed parent/variation context
 plus reviewed aliases; `retrieval_text` and `provenance.matched_node_id` identify the matching
-window/node. The outer location is that node's source anchor, not a claim that every
-cross-page instruction occurs there; individual citation segments retain their exact pages,
+window/node. The outer location is the **first instruction segment of that node**, never
+its name/alias/chapter/navigation heading or its parent's instruction location. This applies
+to parent exercises, named variations and unnamed variations alike. It is not a claim that
+every cross-page instruction occurs there; individual citation segments retain their exact pages,
 regions and original lines. Search coverage contains only record IDs/revisions,
 states and gap summaries, not withheld sibling text. Reports/inspect are private review
 surfaces and include withheld draft content; do not treat that as eligible evidence.
@@ -151,6 +188,23 @@ invalidates the existing index (`stale_exercises`) until rebuilt. Recovery chang
 re-drafting and reviewing affected records before rebuilding. Imports and catalog writes
 are atomic and mode 0600; protect parent directories and serialize operator updates.
 Hashes detect staleness, not hostile rewriting of all trust artifacts.
+
+## Instruction-anchor index migration
+
+Exercise imports record `exercises.instruction_anchor_version: 1` in their report binding.
+Exercise indexes missing that marker or carrying a different version fail report/search
+with `stale_settings`: older indexes may persist navigation-page anchors. They are not
+silently repaired at query time. Re-run the import command above against the same approved
+source, existing reviewed exercise catalog, section, recovery bundle (if used) and embedding
+model to atomically rebuild the exercise index. Do not hand-edit the SQLite metadata.
+
+This policy versions only exercise-index anchors. Catalog processing settings remain
+version 1; unchanged catalogs, accepted revisions, review histories, immutable record and
+passage IDs, name provenance and complete evidence text remain valid. No re-draft or new
+catalog review is required solely for this migration. Native-prose and programme indexes
+have no new marker requirement or global settings change. Programme dependencies bind to
+reviewed exercise catalogs, not exercise indexes, so this migration does not require their
+rebuild. Existing source/recovery/catalog/model trust checks still apply.
 
 Private acceptance should separately compare representative multi-page exercises, adjacent
 same-page movements, harder/easier children, shared-line metadata, hyphens and explicitly
