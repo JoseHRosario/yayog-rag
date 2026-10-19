@@ -3,10 +3,12 @@
 Import a **manually reviewed prose section** from a local PDF and retrieve supporting
 passages. Damaged text lines can be recovered with local targeted OCR and explicitly
 accepted against rendered crops. Reviewed exercise catalogs can preserve complete movement
-context using operator-supplied boundaries and source-backed field selectors. This returns
-evidence, not generated advice. Schedules, answer generation, hosted databases and UI are
-not included. See [Exercise catalogs](docs/exercise-catalogs.md) for the private layout schema
-and draft/review/import commands.
+context using operator-supplied boundaries and source-backed field selectors. Reviewed
+programme sessions preserve schedule cells, exact week/day scope, pair order, timings,
+supporting references and source conflicts. This returns evidence, not generated advice.
+Answer generation, whole-book coverage, hosted databases and UI are not included.
+See [Exercise catalogs](docs/exercise-catalogs.md) and
+[Programme sessions](docs/programme-sessions.md) for private layout schemas and commands.
 
 ## Install and private storage
 
