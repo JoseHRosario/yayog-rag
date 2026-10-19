@@ -52,7 +52,13 @@ def _inside_boundaries(page: int, box: Any, boundaries: list[dict[str, Any]]) ->
 
 
 def _derive(
-    source: Path, layout: dict[str, Any], start: int, end: int, recovered: dict[str, Any] | None
+    source: Path,
+    layout: dict[str, Any],
+    start: int,
+    end: int,
+    recovered: dict[str, Any] | None,
+    *,
+    table_cells: bool = False,
 ) -> list[dict[str, Any]]:
     records = []
     ids: set[str] = set()
@@ -80,15 +86,39 @@ def _derive(
                             gaps.append("unresolved_recovery")
                 else:
                     missing, trace = unmapped_fonts(page), page.get_texttrace()
-                    for block in page.get_text("dict")["blocks"]:
-                        for line in block.get("lines", []):
-                            if box.intersects(_rect_factory(line["bbox"])) and line_reason(
-                                line,
-                                missing,
-                                raw_line_text(line, trace),
-                                unmapped=line_has_unmapped_glyphs(page, line),
-                            ):
-                                gaps.append("unresolved_native_text")
+                    lines = [
+                        line
+                        for block in page.get_text("dict")["blocks"]
+                        for line in block.get("lines", [])
+                    ]
+                    if table_cells:
+                        from .cells import native_cell
+
+                        # A PDF line can cross several unrelated cells. Assess
+                        # only glyphs actually contained by this declared region,
+                        # retaining their geometry for raw/mapping checks.
+                        lines = [
+                            {"bbox": line["bbox"], "spans": [{"text": line["text"]}]}
+                            for line in native_cell(page, box)
+                        ]
+                    for line in lines:
+                        reason = line_reason(
+                            line,
+                            missing,
+                            raw_line_text(line, trace),
+                            unmapped=line_has_unmapped_glyphs(page, line),
+                        )
+                        structural = (
+                            table_cells
+                            and reason == "suspicious_native"
+                            and not any(c.isalpha() for s in line["spans"] for c in s["text"])
+                        )
+                        if (
+                            box.intersects(_rect_factory(line["bbox"]))
+                            and reason
+                            and not structural
+                        ):
+                            gaps.append("unresolved_native_text")
 
             def derive_node(
                 node: dict[str, Any],
@@ -162,6 +192,10 @@ def _derive(
                                                 else line["text"],
                                             }
                                         )
+                        if recovered is None and table_cells:
+                            from .cells import native_cell
+
+                            selected = native_cell(page, box)
                         text = "\n".join(line["text"] for line in selected)
                         quote = selector.get("quote")
                         if quote is not None:

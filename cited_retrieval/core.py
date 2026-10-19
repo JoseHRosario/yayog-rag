@@ -289,6 +289,7 @@ def ingest(
     approval: dict[str, Any] | None = None,
     recovery: str | Path | None = None,
     exercises: str | Path | None = None,
+    programmes: str | Path | None = None,
 ) -> dict[str, Any]:
     """Rebuild atomically after explicit review of this artifact's selected pages."""
     path, target = Path(pdf).resolve(), Path(index).resolve()
@@ -317,7 +318,33 @@ def ingest(
                 info["status"] = "candidate"
                 info["reason"] = None
     exercise_binding = None
-    if exercises is not None:
+    programme_binding = None
+    if programmes is not None:
+        from .programmes import inspect_programmes, programme_passages, protected_artifacts
+
+        if exercises is not None:
+            raise ValueError("invalid_programme_layout")
+        catalog_path = Path(programmes).resolve()
+        if catalog_path == target:
+            raise ValueError("unsafe_index_path")
+        catalog_hash = _hash_file(catalog_path)
+        catalog = inspect_programmes(catalog_path)
+        binding = catalog["binding"]
+        if target in protected_artifacts(binding):
+            raise ValueError("unsafe_index_path")
+        if (
+            binding["source_sha256"] != preview["sha256"]
+            or binding["section"] != preview["section"]
+            or binding["recovery_sha256"] != recovery_hash
+        ):
+            raise ValueError("stale_programmes")
+        programme_binding = {
+            "catalog_path": str(catalog_path),
+            "catalog_sha256": catalog_hash,
+            "records": catalog["records"],
+        }
+        passages = programme_passages(catalog)
+    elif exercises is not None:
         from .exercises import exercise_passages, inspect_exercises
 
         catalog_path = Path(exercises).resolve()
@@ -348,6 +375,10 @@ def ingest(
     vectors = _vectors(embedder, [p.get("retrieval_text", p["text"]) for p in passages])
     if identity != embedder.identity:
         raise ValueError("model_changed")
+    if programme_binding is not None:
+        from .programmes import validate_programmes
+
+        validate_programmes(programme_binding)
     if exercise_binding is not None:
         from .exercises import validate_exercises
 
@@ -372,6 +403,23 @@ def ingest(
             if start <= page["pdf_page"] <= end:
                 page["status"] = "candidate"
                 page["reason"] = None
+    if programme_binding is not None:
+        imported_pages = {
+            b["pdf_page"]
+            for r in programme_binding["records"]
+            if r["eligible"] and r["kind"] == "session"
+            for b in r["boundaries"]
+        }
+        imported_pages.update(
+            b["pdf_page"]
+            for passage in passages
+            for reference in [passage["session"]["method_reference"]]
+            if reference["status"] == "resolved"
+            for b in reference["record"]["boundaries"]
+        )
+        for page in preview["pages"]:
+            if start <= page["pdf_page"] <= end:
+                page.update(status="candidate", reason=None)
     for page in preview["pages"]:
         if page["status"] == "candidate":
             if page["pdf_page"] in imported_pages:
@@ -379,7 +427,11 @@ def ingest(
             else:
                 page["status"] = "excluded"
                 page["reason"] = (
-                    "no_eligible_exercises" if exercise_binding is not None else "no_eligible_prose"
+                    "no_eligible_sessions"
+                    if programme_binding is not None
+                    else "no_eligible_exercises"
+                    if exercise_binding is not None
+                    else "no_eligible_prose"
                 )
     result = {
         **preview,
@@ -389,6 +441,16 @@ def ingest(
         "settings": SETTINGS.copy(),
         "approval": approval,
     }
+    if programme_binding is not None:
+        result["programmes"] = programme_binding
+        for page in result["pages"]:
+            related = [
+                r
+                for r in programme_binding["records"]
+                if any(b["pdf_page"] == page["pdf_page"] for b in r["boundaries"])
+            ]
+            if page["status"] == "imported" and any(not r["eligible"] for r in related):
+                page.update(status="partial", reason="excluded_sessions")
     records = [[_json(p), _json(v)] for p, v in zip(passages, vectors, strict=True)]
     if exercise_binding is not None:
         result["exercises"] = exercise_binding
@@ -492,6 +554,10 @@ def _load(index: str | Path) -> tuple[sqlite3.Connection, dict[str, Any], list[l
             from .exercises import validate_exercises
 
             validate_exercises(meta["report"]["exercises"])
+        if "programmes" in meta["report"]:
+            from .programmes import validate_programmes
+
+            validate_programmes(meta["report"]["programmes"])
         return db, meta, records
     except BaseException:
         db.close()

@@ -13,8 +13,12 @@ import pymupdf
 
 from . import ingest, inspect_review, inspect_source, recover, report, review, search
 from .exercises import draft_exercises, inspect_exercises, review_exercise
+from .programmes import draft_programmes, inspect_programmes, review_programme
 
 SAFE_ERRORS = {
+    "stale_programmes",
+    "invalid_programme_layout",
+    "invalid_session_filter",
     "stale_exercises",
     "invalid_exercise_layout",
     "invalid_exercise_image",
@@ -64,6 +68,21 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_argument("--record", required=True)
     sub.add_argument("--revision", required=True)
     sub.add_argument("--state", choices=["accepted", "rejected", "pending"], required=True)
+    sub = commands.add_parser("draft-programmes")
+    sub.add_argument("pdf")
+    sub.add_argument("--catalog", required=True)
+    sub.add_argument("--layout", required=True)
+    sub.add_argument("--start", type=int, required=True)
+    sub.add_argument("--end", type=int, required=True)
+    sub.add_argument("--recovery")
+    sub.add_argument("--exercise-catalog", action="append", default=[])
+    sub = commands.add_parser("inspect-programmes")
+    sub.add_argument("catalog")
+    sub = commands.add_parser("review-programme")
+    sub.add_argument("catalog")
+    sub.add_argument("--record", required=True)
+    sub.add_argument("--revision", required=True)
+    sub.add_argument("--state", choices=["accepted", "rejected", "pending"], required=True)
     for command in ("inspect", "import", "recover"):
         sub = commands.add_parser(command)
         sub.add_argument("pdf")
@@ -84,6 +103,7 @@ def _parser() -> argparse.ArgumentParser:
             sub.add_argument("--model-dir", required=True)
             sub.add_argument("--recovery", help="Private reviewed recovery bundle")
             sub.add_argument("--exercises", help="Private reviewed exercise catalog")
+            sub.add_argument("--programmes", help="Private reviewed programme catalog")
     sub = commands.add_parser("inspect-review", aliases=["inspectreview"])
     sub.add_argument("bundle")
     sub = commands.add_parser("review")
@@ -94,7 +114,10 @@ def _parser() -> argparse.ArgumentParser:
     sub = commands.add_parser("report")
     sub.add_argument("--index", required=True)
     sub = commands.add_parser("search")
-    sub.add_argument("question")
+    sub.add_argument("question", nargs="?", default="")
+    sub.add_argument("--programme", default=argparse.SUPPRESS)
+    sub.add_argument("--week", type=int, default=argparse.SUPPRESS)
+    sub.add_argument("--day", type=int, default=argparse.SUPPRESS)
     sub.add_argument("--index", required=True)
     sub.add_argument("--model-dir", required=True)
     sub.add_argument("--limit", type=int, default=5)
@@ -102,6 +125,20 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _execute(args: argparse.Namespace) -> dict[str, Any]:
+    if args.command == "draft-programmes":
+        return draft_programmes(
+            args.pdf,
+            args.catalog,
+            json.loads(Path(args.layout).read_text()),
+            args.start,
+            args.end,
+            recovery=args.recovery,
+            exercise_catalogs=args.exercise_catalog,
+        )
+    if args.command == "inspect-programmes":
+        return inspect_programmes(args.catalog)
+    if args.command == "review-programme":
+        return review_programme(args.catalog, args.record, args.revision, args.state)
     if args.command == "draft-exercises":
         return draft_exercises(
             args.pdf,
@@ -157,8 +194,12 @@ def _execute(args: argparse.Namespace) -> dict[str, Any]:
             approval=approval,
             recovery=args.recovery,
             exercises=args.exercises,
+            programmes=args.programmes,
         )
-    return search(args.index, args.question, embedder, limit=args.limit)
+    filters = {
+        key: getattr(args, key) for key in ("programme", "week", "day") if hasattr(args, key)
+    }
+    return search(args.index, args.question, embedder, limit=args.limit, **filters)
 
 
 def main(argv: list[str] | None = None) -> int:

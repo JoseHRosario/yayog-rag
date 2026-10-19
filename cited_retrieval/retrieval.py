@@ -19,6 +19,8 @@ from .policy import (
     SEMANTIC_THRESHOLD,
 )
 
+_UNSET = object()
+
 
 def search(
     index: str | Path,
@@ -27,8 +29,21 @@ def search(
     *,
     limit: int = 5,
     source: str | Path | None = None,
+    programme: object = _UNSET,
+    week: object = _UNSET,
+    day: object = _UNSET,
 ) -> dict[str, Any]:
-    if not 1 <= limit <= 50 or not question.strip() or len(question) > 4000:
+    filtered = any(v is not _UNSET for v in (programme, week, day))
+    if filtered and (
+        not isinstance(programme, str)
+        or not programme.strip()
+        or type(week) is not int
+        or not 1 <= week <= 104
+        or type(day) is not int
+        or not 1 <= day <= 7
+    ):
+        raise ValueError("invalid_session_filter")
+    if not 1 <= limit <= 50 or (not question.strip() and not filtered) or len(question) > 4000:
         raise ValueError("invalid_query")
     db, meta, records = _load(index)
     try:
@@ -39,7 +54,9 @@ def search(
 
             if _hash_file(Path(source)) != meta["report"]["sha256"]:
                 raise ValueError("stale_source")
-        query = np.asarray(_vectors(embedder, [question])[0])
+        query = np.asarray(
+            _vectors(embedder, [question if question.strip() else str(programme)])[0]
+        )
         if embedder.identity != meta["report"]["model"]:
             raise ValueError("incompatible_model")
         if len(query) != meta["report"]["dimensions"]:
@@ -132,6 +149,45 @@ def search(
                     parents.append(i)
                     seen.add(parent_id)
             ranked = parents
+        if "programmes" in meta["report"]:
+            from .programmes import validate_programmes
+
+            validate_programmes(meta["report"]["programmes"])
+            if filtered:
+                matching_sessions = [
+                    session
+                    for session in meta["report"]["programmes"]["records"]
+                    if session["kind"] == "session"
+                    and str(programme).strip().casefold()
+                    in {
+                        n.strip().casefold()
+                        for n in [session["programme"], *session["aliases"]]
+                        if n is not None
+                    }
+                    and week in session["weeks"]
+                    and day == session["day_number"]
+                ]
+                identities = {session["id"] for session in matching_sessions}
+                if len(identities) > 1:
+                    ambiguous = [{"id": rid} for rid in sorted(identities)]
+                    ranked = []
+                else:
+                    ranked = [
+                        i
+                        for i, record in enumerate(records)
+                        if json.loads(record[0])["session"]["id"] in identities
+                    ]
+            seen_sessions: set[str] = set()
+            unique_sessions = []
+            for i in ranked:
+                rid = json.loads(records[i][0])["session"]["id"]
+                if rid not in seen_sessions:
+                    unique_sessions.append(i)
+                    seen_sessions.add(rid)
+            ranked = unique_sessions
+        elif filtered:
+            ranked = []
+            ambiguous = []
         ranked = ranked[:limit]
         passages = [
             {
@@ -145,6 +201,9 @@ def search(
         ]
         if "recovery" in meta["report"]:
             _validate_recovery(meta["report"]["recovery"])
+        # Revalidate the complete dependency graph after inference, including source changes.
+        checked, _, _ = _load(index)
+        checked.close()
         return {
             "status": "ambiguous" if ambiguous else "evidence" if passages else "no_evidence",
             **({"candidates": ambiguous} if ambiguous else {}),
@@ -165,7 +224,7 @@ def search(
                             }
                             for gap in meta["report"]["recovery"]["gaps"]
                         ]
-                        if "exercises" in meta["report"]
+                        if "exercises" in meta["report"] or "programmes" in meta["report"]
                         else meta["report"]["recovery"]["gaps"],
                         "warnings": meta["report"]["recovery"]["warnings"],
                     }

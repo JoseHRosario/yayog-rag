@@ -39,6 +39,8 @@ Read it before changing extraction, chunking, eligibility or source-validation b
   recovery inside any boundary. Keep line-end hyphens unless each join is explicitly reviewed.
   Associate only verified page/xref/image occurrences, not every photograph on a shared page.
   Keep draft inspection/report content separate from eligible search evidence.
+- For schedule extraction, review, dependencies and strict session filters, follow
+  [Programme sessions](../programme-sessions.md).
 - Flattened tables lose programme/day/exercise relationships. Verify grids, ordered pairs,
   quantities, units and timings against the source before trusting structured sessions.
 - Disclose contradictions with references to both claims; never silently rewrite them as OCR fixes.
