@@ -12,10 +12,15 @@ from typing import Any
 import pymupdf
 
 from . import ingest, inspect_review, inspect_source, recover, report, review, search
+from .answers import answer, finish_answer, prepare_answer
 from .exercises import draft_exercises, inspect_exercises, review_exercise
+from .openai_completion import OpenAICompletion
 from .programmes import draft_programmes, inspect_programmes, review_programme
 
 SAFE_ERRORS = {
+    "unsafe_answer_path",
+    "invalid_inference_config",
+    "connection_not_authorized",
     "stale_programmes",
     "invalid_programme_layout",
     "invalid_session_filter",
@@ -121,10 +126,48 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_argument("--index", required=True)
     sub.add_argument("--model-dir", required=True)
     sub.add_argument("--limit", type=int, default=5)
+    for command in ("answer", "prepare-answer"):
+        sub = commands.add_parser(command)
+        sub.add_argument("question")
+        sub.add_argument("--index", required=True)
+        sub.add_argument("--model-dir", required=True)
+        sub.add_argument("--limit", type=int, default=5)
+        sub.add_argument("--programme", default=argparse.SUPPRESS)
+        sub.add_argument("--week", type=int, default=argparse.SUPPRESS)
+        sub.add_argument("--day", type=int, default=argparse.SUPPRESS)
+        sub.add_argument("--base-url", required=True)
+        sub.add_argument("--model", required=True, help="Exact advertised completion model ID")
+        sub.add_argument("--auth-env", help="Environment variable NAME, never the secret")
+        sub.add_argument("--timeout", type=float, default=60.0)
+        sub.add_argument("--max-tokens", type=int, default=1024)
+        sub.add_argument("--max-response-bytes", type=int, default=2_000_000)
+        sub.add_argument("--max-prompt-bytes", type=int, default=120_000)
+        sub.add_argument(
+            "--output-dir", required=True, help="NEW private directory outside checkout"
+        )
+        sub.add_argument("--connection-authorized", action="store_true", required=True)
+    sub = commands.add_parser("finish-answer")
+    sub.add_argument("--index", required=True)
+    sub.add_argument("--request-dir", required=True)
+    sub.add_argument("--response", required=True)
     return parser
 
 
 def _execute(args: argparse.Namespace) -> dict[str, Any]:
+    if args.command == "finish-answer":
+        return finish_answer(args.index, args.request_dir, args.response)
+    provider = None
+    if args.command in {"answer", "prepare-answer"}:
+        provider = OpenAICompletion(
+            args.base_url,
+            args.model,
+            connection_authorized=args.connection_authorized,
+            auth_env=args.auth_env,
+            timeout=args.timeout,
+            max_tokens=args.max_tokens,
+            max_response_bytes=args.max_response_bytes,
+            max_prompt_bytes=args.max_prompt_bytes,
+        )
     if args.command == "draft-programmes":
         return draft_programmes(
             args.pdf,
@@ -199,6 +242,17 @@ def _execute(args: argparse.Namespace) -> dict[str, Any]:
     filters = {
         key: getattr(args, key) for key in ("programme", "week", "day") if hasattr(args, key)
     }
+    if provider is not None:
+        operation = answer if args.command == "answer" else prepare_answer
+        return operation(
+            args.index,
+            args.question,
+            embedder,
+            provider=provider,
+            output_dir=args.output_dir,
+            limit=args.limit,
+            **filters,
+        )
     return search(args.index, args.question, embedder, limit=args.limit, **filters)
 
 
@@ -225,4 +279,4 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "error", "error": code}))
         return 2
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
-    return 0
+    return 2 if result.get("status") == "error" else 0
