@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import pymupdf
 import pytest
@@ -65,6 +66,176 @@ def fixture(tmp_path: Path):
     catalog = tmp_path / "catalog.json"
     draft_exercises(source, catalog, layout, 1, 2)
     return source, catalog, layout
+
+
+def clipped_image_fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict[str, Any], dict[str, Any], int]:
+    source, catalog, layout = fixture(tmp_path)
+    with pymupdf.open(source) as doc:
+        page = doc[0]
+        pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 10, 10), False)
+        pix.clear_with(80)
+        xref = page.insert_image(pymupdf.Rect(-20, 240, 80, 340), pixmap=pix)
+        page.insert_image(pymupdf.Rect(-40, 400, 60, 500), xref=xref)
+        page.insert_image(pymupdf.Rect(300, 240, 400, 340), xref=xref)
+        pix.clear_with(160)
+        other_xref = page.insert_image(pymupdf.Rect(450, 240, 500, 290), pixmap=pix)
+        doc.saveIncr()
+    layout["records"][0]["boundaries"][0]["bbox"] = [0, 30, 510, 500]
+    image = {
+        "pdf_page": 1,
+        "xref": xref,
+        "bbox": [0, 240, 80, 340],
+        "placement_bbox": [-20, 240, 80, 340],
+    }
+    layout["records"][0]["images"] = [image]
+    return source, catalog, layout, image, other_xref
+
+
+@pytest.mark.parametrize("child", [False, True])
+def test_exact_clipped_image_placement_survives_review_and_import(
+    tmp_path: Path, child: bool
+) -> None:
+    source, catalog, layout, image, _ = clipped_image_fixture(tmp_path)
+    if child:
+        layout["records"][0]["variations"][0]["images"] = layout["records"][0].pop("images")
+    drafted = draft_exercises(source, catalog, layout, 1, 2)
+    expected = {
+        "source_id": drafted["binding"]["source_sha256"],
+        **image,
+        "visual_understanding": False,
+    }
+    record = inspect_exercises(catalog)["records"][0]
+    node = record["variations"][0] if child else record
+    assert node["images"] == [expected]
+    assert record["eligible"] is False
+    accept(catalog)
+    assert inspect_exercises(catalog)["records"][0]["eligible"] is True
+    result = search(build(source, catalog, tmp_path), "Cloud press", AuthoredEmbedder())
+    record = result["passages"][0]["exercise"]
+    node = record["variations"][0] if child else record
+    assert node["images"] == [expected]
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ("arbitrary_crop", "invalid_exercise_image"),
+        ("near_visible_box", "invalid_exercise_image"),
+        ("wrong_placement", "invalid_exercise_image"),
+        ("near_placement", "invalid_exercise_image"),
+        ("wrong_existing_xref", "invalid_exercise_image"),
+        ("missing_xref", "invalid_exercise_image"),
+        ("swapped_repeated_occurrence", "invalid_exercise_image"),
+        ("swapped_visible_occurrence", "invalid_exercise_image"),
+        ("outside_parent", "invalid_exercise_layout"),
+        ("outside_child", "invalid_exercise_layout"),
+        ("empty_visible", "invalid_exercise_layout"),
+        ("offpage_visible", "invalid_exercise_layout"),
+        ("empty_placement", "invalid_exercise_image"),
+        ("infinite_placement", "invalid_exercise_image"),
+        ("unclipped_opt_in", "invalid_exercise_image"),
+        ("field_offpage", "invalid_exercise_layout"),
+        ("boundary_offpage", "invalid_exercise_layout"),
+    ],
+)
+def test_clipped_images_reject_nonexact_or_unowned_geometry(
+    tmp_path: Path, change: str, error: str
+) -> None:
+    source, catalog, layout, image, other_xref = clipped_image_fixture(tmp_path)
+    draft_exercises(source, catalog, layout, 1, 2)
+    before = catalog.read_bytes()
+    parent = layout["records"][0]
+    if change == "arbitrary_crop":
+        image["bbox"] = [10, 250, 70, 330]
+    elif change == "near_visible_box":
+        image["bbox"][2] = 79.99999
+    elif change == "wrong_placement":
+        image["placement_bbox"][0] = -30
+    elif change == "near_placement":
+        image["placement_bbox"][0] = -20.00001
+    elif change == "wrong_existing_xref":
+        image["xref"] = other_xref
+    elif change == "missing_xref":
+        image["xref"] = 99999
+    elif change == "swapped_repeated_occurrence":
+        image["placement_bbox"] = [-40, 400, 60, 500]
+    elif change == "swapped_visible_occurrence":
+        image["bbox"] = [0, 400, 60, 500]
+    elif change == "outside_parent":
+        parent["boundaries"][0]["bbox"][0] = 1
+    elif change == "outside_child":
+        child = parent["variations"][0]
+        child["images"] = parent.pop("images")
+        child["boundaries"] = [
+            {"pdf_page": 1, "bbox": [1, 30, 510, 500]},
+            parent["boundaries"][1],
+        ]
+    elif change == "empty_visible":
+        image["bbox"] = [0, 240, 0, 340]
+    elif change == "offpage_visible":
+        image["bbox"] = [-1, 240, 80, 340]
+    elif change == "empty_placement":
+        image["placement_bbox"] = [0, 240, 0, 340]
+    elif change == "infinite_placement":
+        image["placement_bbox"] = list(pymupdf.INFINITE_RECT())
+    elif change == "unclipped_opt_in":
+        image["bbox"] = image["placement_bbox"] = [300, 240, 400, 340]
+    elif change == "field_offpage":
+        parent["fields"]["name"][0]["bbox"][0] = -1
+    elif change == "boundary_offpage":
+        parent["boundaries"][0]["bbox"][0] = -1
+    with pytest.raises(ValueError, match=error):
+        draft_exercises(source, catalog, layout, 1, 2)
+    assert catalog.read_bytes() == before
+    assert inspect_exercises(catalog)["records"][0]["images"][0]["bbox"] == [0, 240, 80, 340]
+
+
+def test_old_image_format_stays_exact_and_does_not_acquire_placement_provenance(
+    tmp_path: Path,
+) -> None:
+    source, catalog, layout, image, _ = clipped_image_fixture(tmp_path)
+    image.pop("placement_bbox")
+    # An intersection is not an original occurrence in the old format.
+    with pytest.raises(ValueError, match="invalid_exercise_image"):
+        draft_exercises(source, catalog, layout, 1, 2)
+    image["bbox"] = [-20, 240, 80, 340]
+    with pytest.raises(ValueError, match="invalid_exercise_layout"):
+        draft_exercises(source, catalog, layout, 1, 2)
+    image["bbox"] = [300, 240, 400, 340]
+    drafted = draft_exercises(source, catalog, layout, 1, 2)
+    expected = {
+        "source_id": drafted["binding"]["source_sha256"],
+        "pdf_page": 1,
+        "xref": image["xref"],
+        "bbox": [300, 240, 400, 340],
+        "visual_understanding": False,
+    }
+    assert drafted["binding"]["settings"]["version"] == 1
+    assert drafted["records"][0]["images"] == [expected]
+    accept(catalog)
+    accepted = inspect_exercises(catalog)["records"][0]
+    repeated = draft_exercises(source, catalog, layout, 1, 2)["records"][0]
+    assert repeated == accepted
+    result = search(build(source, catalog, tmp_path), "Cloud press", AuthoredEmbedder())
+    assert result["passages"][0]["exercise"]["images"] == [expected]
+
+
+def test_changing_exact_clipped_occurrence_requires_new_review(tmp_path: Path) -> None:
+    source, catalog, layout, image, _ = clipped_image_fixture(tmp_path)
+    draft_exercises(source, catalog, layout, 1, 2)
+    accept(catalog)
+    old = inspect_exercises(catalog)["records"][0]
+    image["placement_bbox"] = [-40, 400, 60, 500]
+    image["bbox"] = [0, 400, 60, 500]
+    record = draft_exercises(source, catalog, layout, 1, 2)["records"][0]
+    assert record["revision"] != old["revision"]
+    assert record["state"] == "pending"
+    assert record["eligible"] is False
+    assert record["history"] == old["history"]
+    with pytest.raises(ValueError, match="review_revision_mismatch"):
+        review_exercise(catalog, "cloud", old["revision"], "accepted")
 
 
 def test_unnamed_variation_is_retrievable_without_inventing_a_name(tmp_path):

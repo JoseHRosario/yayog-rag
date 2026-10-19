@@ -105,6 +105,44 @@ contexts. Repetitive coverage diagnostics are summarized: selected pages, an
 unselected-page count, and gap counts/reasons. Full page/gap details remain in the
 local bundle. This is metadata compaction, not instruction/warning truncation.
 
+## Ordinary prose: matching windows and same-page context
+
+`search(..., limit=N)` still returns at most N threshold-qualified matching windows
+in `passages`, with their original text, locations, ranks and scores unchanged.
+For ordinary prose indexes only, it additionally returns:
+
+- `context_scope: "eligible_indexed_same_page_prose"`;
+- `page_context`: every other eligible indexed passage on a physical PDF page of
+  those matches, deduplicated against the matches and ordered by page then ordinal.
+  These passages retain their exact source/passage IDs, text, section paths,
+  PDF/printed locations, bounding boxes, review status and provenance. They are
+  context, **not independently threshold-qualified matches**, and receive no scores.
+
+No raw PDF re-extraction, adjacent-page expansion or eligibility override occurs.
+No match means an empty context list. Selected-page/recovery exclusions remain
+excluded; whole mixed blocks with unresolved or rejected recovery remain withheld.
+Exercise/variation and programme indexes do not expose or use `page_context`:
+existing reviewed structured-record scope remains unchanged, including withheld
+same-page siblings.
+
+`prepare_answer` and `answer` send both lists in full, assign citation IDs to
+matches first and context second, and bind both lists into the existing request
+packet and snapshot checks. `finish_answer` accepts citations into either list and
+rejects changed retained context. All original evidence stays in the private
+`request.json`; source/review/corpus revalidation still occurs before and after
+inference. A myth heading and its eligible same-page refutation can therefore
+reach the model together even with `limit=1`.
+
+This means **complete eligible indexed same-page context**, not complete source
+pages, lists, chapters or semantic topics. Non-indexed headings/short blocks,
+unselected pages, unresolved recovery and cross-page qualifications cannot be
+reconstructed or inferred. Existing page/gap disclosures must still be considered;
+index-time exclusions are not repaired by retrieval. Page context may include
+other sections on that page, but each passage keeps its separate section/location.
+Larger prompts fail the existing byte limit rather than silently dropping text.
+There is no index-format, embedding-window, matching-policy or settings change:
+existing compatible indexes remain validated and usable without rebuilding.
+
 ## 3. Finish on the retrieval machine
 
 ```sh
@@ -126,8 +164,9 @@ Only one completion with `finish_reason:stop` is accepted. A present response `m
 must equal the configured advertised ID; if absent, `response_model` is null.
 Malformed/truncated output is rejected, never repaired into a plausible answer.
 
-Every non-abstaining answer needs supplied `[E1]`-style citations. Unknown IDs,
-missing citations and other square-bracket references are rejected. A labelled
+Every non-abstaining answer needs supplied `[E1]`-style citations. Comma-separated
+groups such as `[E1, E2]` are supported; every identifier is checked individually.
+Unknown IDs, missing citations and other square-bracket references are rejected. A labelled
 `bbox` array of exactly four signed integer/decimal coordinates is location prose,
 not a citation; accepting its syntax does not verify its accuracy. IDs map back to
 full evidence in `request.json`. **Membership/syntax is not claim entailment**:

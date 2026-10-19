@@ -16,6 +16,8 @@ import pymupdf
 
 from .cells import render_digest
 from .core import _digest, _hash_file, _json, inspect_source
+from .derivation_cache import memoize_derivation
+from .exercises import VERSION as EXERCISE_VERSION
 from .exercises import _derive as derive_source
 from .exercises import _revision, _save, inspect_exercises
 from .recovery import inspect_review
@@ -27,6 +29,7 @@ _open: Any = pymupdf.open
 _rect: Any = pymupdf.Rect
 
 
+@memoize_derivation(lambda: (VERSION, EXERCISE_VERSION, pymupdf.VersionFitz))
 def _derive(
     source: Path, layout: dict[str, Any], start: int, end: int, recovered: dict[str, Any] | None
 ) -> list[dict[str, Any]]:
@@ -268,6 +271,8 @@ def draft_programmes(
     _dependencies(binding)
     if recovery and _hash_file(Path(recovery)) != binding["recovery_sha256"]:
         raise ValueError("stale_recovery")
+    if recovery and inspect_review(recovery) != recovered:
+        raise ValueError("stale_recovery")
     _save(target, {"binding": binding, "layout": layout, "records": records})
     return inspect_programmes(target)
 
@@ -294,6 +299,16 @@ def inspect_programmes(catalog: str | Path) -> dict[str, Any]:
             _revision(r, b) != stored["revision"]
             for r, stored in zip(derived, value["records"], strict=True)
         ):
+            raise ValueError("stale_programmes")
+        if _hash_file(Path(b["source_path"])) != b["source_sha256"]:
+            raise ValueError("stale_programmes")
+        _dependencies(b)
+        if b["recovery_path"] and (
+            inspect_review(b["recovery_path"]) != recovered
+            or _hash_file(Path(b["recovery_path"])) != b["recovery_sha256"]
+        ):
+            raise ValueError("stale_programmes")
+        if _read(Path(catalog)) != value:
             raise ValueError("stale_programmes")
     except (OSError, KeyError, TypeError):
         raise ValueError("stale_programmes") from None

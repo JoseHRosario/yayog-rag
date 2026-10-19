@@ -66,7 +66,11 @@ def raw_line_text(line: dict[str, Any], trace: list[dict[str, Any]]) -> str:
 def line_has_unmapped_glyphs(page: Any, line: dict[str, Any]) -> bool:
     # Family names are not font-resource identities: a healthy simple font and an
     # unmapped CID font can share a family. Disable CID fallback in this region.
-    flags = pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_USE_CID_FOR_UNKNOWN_UNICODE
+    flags = (
+        pymupdf.TEXTFLAGS_DICT
+        & ~pymupdf.TEXT_USE_CID_FOR_UNKNOWN_UNICODE
+        & ~pymupdf.TEXT_PRESERVE_IMAGES
+    )
     blocks = page.get_text("dict", flags=flags, clip=pymupdf.Rect(line["bbox"]))["blocks"]  # type: ignore[no-untyped-call]
     return any(
         "\ufffd" in span["text"]

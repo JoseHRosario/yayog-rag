@@ -207,6 +207,17 @@ catalog, recovery bundle or crop in the complete dependency graph. Supply exerci
 dependencies at draft time, not `--exercises` alongside
 `--programmes` at import.
 
+Repeated inspection in one Python process reuses only deterministic source derivation
+(including cell extraction and rendered-crop digests). The process-private LRU retains
+at most 16 results and 32 MiB of serialized result payloads; oversized results are not
+retained. Keys bind actual source bytes, exact layout/range, complete validated recovery
+state and processing/renderer versions. Inputs and returned results are isolated by deep
+copy. Every inspection still reads and verifies the sealed catalog and exact record
+revisions, hashes sources and dependencies, and validates recovery bundles and crop bytes;
+these checks also run after derivation. Review decisions, eligibility and reports are never
+memoized. No cache is written to disk, no index/settings identity changes, and separate CLI
+processes still pay the initial extraction cost.
+
 Python exports:
 
 ```python

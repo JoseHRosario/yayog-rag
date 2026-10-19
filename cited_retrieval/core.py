@@ -86,7 +86,12 @@ def inspect_source(pdf: str | Path, start: int, end: int) -> dict[str, Any]:
     path = Path(pdf)
     fingerprint = _hash_file(path)
     with pymupdf.open(path) as doc:
-        if doc.is_encrypted or not 1 <= start <= end <= len(doc):
+        if (
+            doc.is_encrypted
+            or type(start) is not int
+            or type(end) is not int
+            or not 1 <= start <= end <= len(doc)
+        ):
             raise ValueError("invalid_section")
         toc = doc.get_toc(simple=False)
         pages = []
@@ -152,7 +157,17 @@ def _passages(
                 native_blocks
                 if recovery is None
                 else [
-                    (*b["bbox"], "\n".join(line["text"] for line in b["lines"]), i, 0)
+                    (
+                        *b["bbox"],
+                        "\n".join(
+                            regions[line["region_id"]]["ocr_text"]
+                            if line["region_id"]
+                            else line["text"]
+                            for line in b["lines"]
+                        ),
+                        i,
+                        0,
+                    )
                     for i, b in enumerate(eligible_blocks)
                 ]
             )
@@ -290,12 +305,24 @@ def ingest(
     recovery: str | Path | None = None,
     exercises: str | Path | None = None,
     programmes: str | Path | None = None,
+    excerpts: str | Path | None = None,
 ) -> dict[str, Any]:
     """Rebuild atomically after explicit review of this artifact's selected pages."""
+    from .index_publication import publish_index, snapshot
+
+    if Path(index).is_symlink():
+        raise ValueError("unsafe_index_path")
     path, target = Path(pdf).resolve(), Path(index).resolve()
+    destination = snapshot(target)
     if path == target:
         raise ValueError("unsafe_index_path")
     preview = inspect_source(path, start, end)
+    if excerpts is not None:
+        from .source_selection import private_artifact
+
+        target = private_artifact(target, "unsafe_index_path")
+        if exercises is not None or programmes is not None:
+            raise ValueError("invalid_excerpt_layout")
     if approval != {"sha256": preview["sha256"], "pages": list(range(start, end + 1))}:
         raise ValueError("review_required")
     recovered = None
@@ -308,18 +335,45 @@ def ingest(
             raise ValueError("unsafe_index_path")
         recovery_hash = _hash_file(recovery_path)
         recovered = inspect_review(recovery_path)
-        if (
-            recovered["source_sha256"] != preview["sha256"]
-            or recovered["section"] != preview["section"]
-        ):
-            raise ValueError("stale_recovery")
+        from .source_selection import private_artifact, recovery_artifacts
+
+        if target in recovery_artifacts(recovery_path, recovered):
+            raise ValueError("unsafe_index_path")
+        if recovered["schema"] == 2:
+            target = private_artifact(target, "unsafe_index_path")
+        from .recovery_selection import recovery_selection
+
+        recovered = recovery_selection(recovered, preview["sha256"], start, end)
         for info in preview["pages"]:
             if start <= info["pdf_page"] <= end:
                 info["status"] = "candidate"
                 info["reason"] = None
     exercise_binding = None
     programme_binding = None
-    if programmes is not None:
+    excerpt_binding = None
+    if excerpts is not None:
+        from .excerpts import INDEX_VERSION, excerpt_passages, inspect_excerpts, protected_artifacts
+
+        catalog_path = Path(excerpts).resolve()
+        catalog_hash = _hash_file(catalog_path)
+        catalog = inspect_excerpts(catalog_path)
+        binding = catalog["binding"]
+        if target in protected_artifacts(binding) | {catalog_path}:
+            raise ValueError("unsafe_index_path")
+        if (
+            binding["source_sha256"] != preview["sha256"]
+            or binding["section"] != preview["section"]
+            or binding["recovery_sha256"] != recovery_hash
+        ):
+            raise ValueError("stale_excerpts")
+        excerpt_binding = {
+            "index_version": INDEX_VERSION,
+            "catalog_path": str(catalog_path),
+            "catalog_sha256": catalog_hash,
+            "records": catalog["records"],
+        }
+        passages = excerpt_passages(catalog)
+    elif programmes is not None:
         from .programmes import inspect_programmes, programme_passages, protected_artifacts
 
         if exercises is not None:
@@ -345,7 +399,12 @@ def ingest(
         }
         passages = programme_passages(catalog)
     elif exercises is not None:
-        from .exercises import exercise_passages, inspect_exercises
+        from .exercises import (
+            INSTRUCTION_ANCHOR_VERSION,
+            MATCHING_WINDOW_VERSION,
+            exercise_passages,
+            inspect_exercises,
+        )
 
         catalog_path = Path(exercises).resolve()
         if catalog_path == target:
@@ -353,6 +412,10 @@ def ingest(
         catalog_hash = _hash_file(catalog_path)
         catalog = inspect_exercises(catalog_path)
         binding = catalog["binding"]
+        from .programmes import protected_artifacts
+
+        if target in protected_artifacts(binding):
+            raise ValueError("unsafe_index_path")
         if (
             binding["source_sha256"] != preview["sha256"]
             or binding["section"] != preview["section"]
@@ -360,6 +423,8 @@ def ingest(
         ):
             raise ValueError("stale_exercises")
         exercise_binding = {
+            "instruction_anchor_version": INSTRUCTION_ANCHOR_VERSION,
+            "matching_window_version": MATCHING_WINDOW_VERSION,
             "catalog_path": str(catalog_path),
             "catalog_sha256": catalog_hash,
             "records": catalog["records"],
@@ -372,9 +437,29 @@ def ingest(
     identity = dict(embedder.identity)
     if not all(identity.get(key) for key in ("model", "version", "artifact_sha256")):
         raise ValueError("invalid_model_identity")
-    vectors = _vectors(embedder, [p.get("retrieval_text", p["text"]) for p in passages])
+    try:
+        vectors = _vectors(embedder, [p.get("retrieval_text", p["text"]) for p in passages])
+    finally:
+        if excerpt_binding is not None:
+            from .excerpts import validate_excerpts
+
+            validate_excerpts(excerpt_binding)
+        if recovery is not None:
+            from .recovery import load_bundle
+
+            load_bundle(Path(recovery).resolve())
+            if _hash_file(Path(recovery)) != recovery_hash:
+                raise ValueError("stale_recovery")
+        if _hash_file(path) != preview["sha256"]:
+            raise ValueError("source_changed")
+        if identity != embedder.identity:
+            raise ValueError("model_changed")
     if identity != embedder.identity:
         raise ValueError("model_changed")
+    if excerpt_binding is not None:
+        from .excerpts import validate_excerpts
+
+        validate_excerpts(excerpt_binding)
     if programme_binding is not None:
         from .programmes import validate_programmes
 
@@ -392,6 +477,16 @@ def ingest(
         if _hash_file(Path(recovery)) != recovery_hash:
             raise ValueError("stale_recovery")
     imported_pages = {p["location"]["pdf_page"] for p in passages}
+    if excerpt_binding is not None:
+        imported_pages = {
+            b["pdf_page"]
+            for r in excerpt_binding["records"]
+            if r["eligible"]
+            for b in r["boundaries"]
+        }
+        for page in preview["pages"]:
+            if start <= page["pdf_page"] <= end:
+                page.update(status="candidate", reason=None)
     if exercise_binding is not None:
         imported_pages = {
             b["pdf_page"]
@@ -438,7 +533,15 @@ def ingest(
         "passage_count": len(passages),
         "model": identity,
         "dimensions": len(vectors[0]),
-        "settings": SETTINGS.copy(),
+        "settings": {
+            **SETTINGS,
+            **({"excerpt_index_version": 1} if excerpt_binding is not None else {}),
+            **(
+                {"image_recovery_version": 1}
+                if recovered is not None and recovered["schema"] == 2
+                else {}
+            ),
+        },
         "approval": approval,
     }
     if programme_binding is not None:
@@ -452,6 +555,11 @@ def ingest(
             if page["status"] == "imported" and any(not r["eligible"] for r in related):
                 page.update(status="partial", reason="excluded_sessions")
     records = [[_json(p), _json(v)] for p, v in zip(passages, vectors, strict=True)]
+    if excerpt_binding is not None:
+        result["excerpts"] = excerpt_binding
+        for page in result["pages"]:
+            if page["status"] == "imported":
+                page.update(status="partial", reason="operator_selected_excerpts_not_whole_page")
     if exercise_binding is not None:
         result["exercises"] = exercise_binding
         for page in result["pages"]:
@@ -469,6 +577,11 @@ def ingest(
             "unresolved_regions": recovered["unresolved_regions"],
             "gaps": recovered["gaps"],
             "warnings": recovered["warnings"],
+            **(
+                {"outside_selection": recovered["outside_selection"]}
+                if "outside_selection" in recovered
+                else {}
+            ),
         }
         for page in result["pages"]:
             gaps = [
@@ -504,28 +617,33 @@ def ingest(
                 [(i, p.get("retrieval_text", p["text"])) for i, p in enumerate(passages, 1)],
             )
         os.chmod(temporary, 0o600)
-        os.replace(temporary, target)
+        publish_index(temporary, target, destination)
     finally:
         temporary.unlink(missing_ok=True)
     return result
 
 
-def _validate_recovery(binding: dict[str, Any]) -> None:
+def _validate_recovery(binding: dict[str, Any]) -> int:
     from .recovery import load_bundle
 
     review_path = Path(binding["bundle_path"])
-    load_bundle(review_path)
+    bundle = load_bundle(review_path)
     try:
         if _hash_file(review_path) != binding["bundle_sha256"]:
             raise ValueError("stale_recovery")
     except OSError:
         raise ValueError("stale_recovery") from None
+    return int(bundle["schema"])
 
 
 def _load(index: str | Path) -> tuple[sqlite3.Connection, dict[str, Any], list[list[str]]]:
     db = sqlite3.connect(Path(index).resolve().as_uri() + "?mode=ro", uri=True)
     try:
         meta = json.loads(db.execute("SELECT json FROM metadata").fetchone()[0])
+        if "excerpts" in meta["report"] or "image_recovery_version" in meta["report"]["settings"]:
+            from .source_selection import private_artifact
+
+            private_artifact(index, "unsafe_index_path")
         seal = meta.pop("manifest_sha256")
         if _digest(_json(meta).encode()) != seal:
             raise ValueError("stale_corpus")
@@ -540,7 +658,16 @@ def _load(index: str | Path) -> tuple[sqlite3.Connection, dict[str, Any], list[l
         ]
         if terms != expected_terms:
             raise ValueError("stale_corpus")
-        if meta["report"]["settings"] != SETTINGS:
+        expected_settings = {
+            **SETTINGS,
+            **({"excerpt_index_version": 1} if "excerpts" in meta["report"] else {}),
+            **(
+                {"image_recovery_version": 1}
+                if meta["report"]["settings"].get("image_recovery_version") is not None
+                else {}
+            ),
+        }
+        if _json(meta["report"]["settings"]) != _json(expected_settings):
             raise ValueError("stale_settings")
         try:
             source_hash = _hash_file(Path(meta["source_path"]))
@@ -549,15 +676,36 @@ def _load(index: str | Path) -> tuple[sqlite3.Connection, dict[str, Any], list[l
         if source_hash != meta["report"]["sha256"]:
             raise ValueError("stale_source")
         if "recovery" in meta["report"]:
-            _validate_recovery(meta["report"]["recovery"])
+            schema = _validate_recovery(meta["report"]["recovery"])
+            marker = meta["report"]["settings"].get("image_recovery_version")
+            if (schema == 2 and (type(marker) is not int or marker != 1)) or (
+                schema != 2 and marker is not None
+            ):
+                raise ValueError("stale_settings")
+        elif "image_recovery_version" in meta["report"]["settings"]:
+            raise ValueError("stale_settings")
         if "exercises" in meta["report"]:
-            from .exercises import validate_exercises
+            from .exercises import (
+                INSTRUCTION_ANCHOR_VERSION,
+                MATCHING_WINDOW_VERSION,
+                validate_exercises,
+            )
 
+            anchor_version = meta["report"]["exercises"].get("instruction_anchor_version")
+            if type(anchor_version) is not int or anchor_version != INSTRUCTION_ANCHOR_VERSION:
+                raise ValueError("stale_settings")
+            matching_version = meta["report"]["exercises"].get("matching_window_version")
+            if type(matching_version) is not int or matching_version != MATCHING_WINDOW_VERSION:
+                raise ValueError("stale_settings")
             validate_exercises(meta["report"]["exercises"])
         if "programmes" in meta["report"]:
             from .programmes import validate_programmes
 
             validate_programmes(meta["report"]["programmes"])
+        if "excerpts" in meta["report"]:
+            from .excerpts import validate_excerpts
+
+            validate_excerpts(meta["report"]["excerpts"])
         return db, meta, records
     except BaseException:
         db.close()

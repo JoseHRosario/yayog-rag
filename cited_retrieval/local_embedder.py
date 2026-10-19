@@ -10,6 +10,8 @@ from pathlib import Path
 from fastembed import TextEmbedding
 
 MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# Bound ONNX inference memory independently of the number of source passages.
+EMBEDDING_BATCH_SIZE = 16
 
 
 class LocalEmbedder:
@@ -60,7 +62,10 @@ class LocalEmbedder:
     def embed(self, texts: list[str]) -> list[list[float]]:
         if self.identity != self._initial_identity:
             raise ValueError("model_changed")
-        vectors = [v.astype(float).tolist() for v in self._model.embed(texts)]
+        vectors = [
+            v.astype(float).tolist()
+            for v in self._model.embed(texts, batch_size=EMBEDDING_BATCH_SIZE)
+        ]
         if self.identity != self._initial_identity:
             raise ValueError("model_changed")
         return vectors

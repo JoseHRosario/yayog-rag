@@ -13,11 +13,23 @@ import pymupdf
 
 from . import ingest, inspect_review, inspect_source, recover, report, review, search
 from .answers import answer, finish_answer, prepare_answer
+from .coverage import draft_coverage, inspect_coverage
+from .excerpts import draft_excerpts, inspect_excerpts, review_excerpt
 from .exercises import draft_exercises, inspect_exercises, review_exercise
 from .openai_completion import OpenAICompletion
 from .programmes import draft_programmes, inspect_programmes, review_programme
 
 SAFE_ERRORS = {
+    "invalid_excerpt_layout",
+    "stale_excerpts",
+    "invalid_source_selection",
+    "invalid_image_regions",
+    "image_region_native_collision",
+    "unsafe_coverage_path",
+    "stale_coverage",
+    "invalid_coverage_manifest",
+    "invalid_evaluation_location",
+    "stale_coverage_evidence",
     "unsafe_answer_path",
     "invalid_inference_config",
     "connection_not_authorized",
@@ -59,6 +71,42 @@ def _parser() -> argparse.ArgumentParser:
         description="Import reviewed prose and retrieve cited evidence."
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    sub = commands.add_parser(
+        "draft-coverage", help="Draft private source-bound coverage accounting"
+    )
+    sub.add_argument("pdf")
+    sub.add_argument(
+        "--audit", required=True, help="New private JSON path outside every Git checkout"
+    )
+    sub.add_argument(
+        "--inventory",
+        help="Private source-bound manual-record JSON; changes require a new draft and reconciliation",
+    )
+    sub.add_argument("--index", action="append", default=[])
+    sub.add_argument("--exercise-catalog", action="append", default=[])
+    sub.add_argument("--programme-catalog", action="append", default=[])
+    sub.add_argument("--excerpt-catalog", action="append", default=[])
+    sub.add_argument("--recovery", action="append", default=[])
+    sub = commands.add_parser(
+        "inspect-coverage", help="Revalidate private coverage and registered inventory"
+    )
+    sub.add_argument(
+        "audit", help="Private manifest outside every Git checkout, including after relocation"
+    )
+    sub = commands.add_parser("draft-excerpts")
+    sub.add_argument("pdf")
+    sub.add_argument("--catalog", required=True)
+    sub.add_argument("--layout", required=True)
+    sub.add_argument("--start", type=int, required=True)
+    sub.add_argument("--end", type=int, required=True)
+    sub.add_argument("--recovery")
+    sub = commands.add_parser("inspect-excerpts")
+    sub.add_argument("catalog")
+    sub = commands.add_parser("review-excerpt")
+    sub.add_argument("catalog")
+    sub.add_argument("--record", required=True)
+    sub.add_argument("--revision", required=True)
+    sub.add_argument("--state", choices=["accepted", "rejected", "pending"], required=True)
     sub = commands.add_parser("draft-exercises")
     sub.add_argument("pdf")
     sub.add_argument("--catalog", required=True)
@@ -94,6 +142,10 @@ def _parser() -> argparse.ArgumentParser:
         sub.add_argument("--start", type=int, required=True)
         sub.add_argument("--end", type=int, required=True)
         if command == "recover":
+            sub.add_argument(
+                "--image-regions",
+                help="Private JSON array of image-only id/page/bbox ROIs; disables native OCR",
+            )
             sub.add_argument("--bundle", required=True)
             sub.add_argument("--tesseract", default="tesseract")
             sub.add_argument("--tessdata-dir")
@@ -108,6 +160,7 @@ def _parser() -> argparse.ArgumentParser:
             sub.add_argument("--model-dir", required=True)
             sub.add_argument("--recovery", help="Private reviewed recovery bundle")
             sub.add_argument("--exercises", help="Private reviewed exercise catalog")
+            sub.add_argument("--excerpts", help="Private individually reviewed prose excerpts")
             sub.add_argument("--programmes", help="Private reviewed programme catalog")
     sub = commands.add_parser("inspect-review", aliases=["inspectreview"])
     sub.add_argument("bundle")
@@ -154,6 +207,27 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _execute(args: argparse.Namespace) -> dict[str, Any]:
+    if args.command == "draft-coverage":
+        return draft_coverage(
+            args.pdf,
+            args.audit,
+            indexes=args.index,
+            exercise_catalogs=args.exercise_catalog,
+            programme_catalogs=args.programme_catalog,
+            excerpt_catalogs=args.excerpt_catalog,
+            recovery_bundles=args.recovery,
+            inventory=args.inventory,
+        )
+    if args.command == "inspect-coverage":
+        return inspect_coverage(args.audit)
+    if args.command == "draft-excerpts":
+        return draft_excerpts(
+            args.pdf, args.catalog, args.layout, args.start, args.end, recovery=args.recovery
+        )
+    if args.command == "inspect-excerpts":
+        return inspect_excerpts(args.catalog)
+    if args.command == "review-excerpt":
+        return review_excerpt(args.catalog, args.record, args.revision, args.state)
     if args.command == "finish-answer":
         return finish_answer(args.index, args.request_dir, args.response)
     provider = None
@@ -212,7 +286,16 @@ def _execute(args: argparse.Namespace) -> dict[str, Any]:
             language=args.language,
             timeout=args.timeout,
         )
-        return recover(args.pdf, args.bundle, args.start, args.end, engine)
+        return recover(
+            args.pdf,
+            args.bundle,
+            args.start,
+            args.end,
+            engine,
+            image_regions=json.loads(Path(args.image_regions).read_bytes())
+            if args.image_regions
+            else None,
+        )
     if args.command == "import":
         preview = inspect_source(args.pdf, args.start, args.end)
         approval = {
@@ -238,6 +321,7 @@ def _execute(args: argparse.Namespace) -> dict[str, Any]:
             recovery=args.recovery,
             exercises=args.exercises,
             programmes=args.programmes,
+            excerpts=args.excerpts,
         )
     filters = {
         key: getattr(args, key) for key in ("programme", "week", "day") if hasattr(args, key)
