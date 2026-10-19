@@ -76,9 +76,19 @@ def _summary(bundle: dict[str, Any]) -> dict[str, Any]:
 
 
 def recover(
-    pdf: str | Path, bundle: str | Path, start: int, end: int, engine: OCR
+    pdf: str | Path,
+    bundle: str | Path,
+    start: int,
+    end: int,
+    engine: OCR,
+    *,
+    image_regions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Render only damaged text lines at 400 DPI; atomically publish pending review."""
+    """Recover damaged native lines, or exclusively explicit image-only ROIs when supplied."""
+    if image_regions is not None:
+        from .image_recovery import recover_images
+
+        return recover_images(pdf, bundle, start, end, engine, image_regions)
     source, target = Path(pdf).resolve(), Path(bundle).resolve()
     if source == target:
         raise ValueError("unsafe_review_path")
@@ -214,9 +224,13 @@ def load_bundle(path: Path) -> dict[str, Any]:
     try:
         value: dict[str, Any] = json.loads(path.read_text())
         seal = value.pop("seal")
-        if _digest(_json(value).encode()) != seal or value["schema"] != 1:
+        if _digest(_json(value).encode()) != seal or type(value["schema"]) is not int:
             raise ValueError("stale_recovery")
-        if value["settings"] != RECOVERY_SETTINGS:
+        if value["schema"] == 2:
+            from .image_recovery import validate_images
+
+            validate_images(value, path)
+        elif value["schema"] != 1 or value["settings"] != RECOVERY_SETTINGS:
             raise ValueError("stale_recovery")
         if _hash_file(Path(value["source_path"])) != value["source_sha256"]:
             raise ValueError("stale_recovery")
@@ -231,6 +245,12 @@ def load_bundle(path: Path) -> dict[str, Any]:
                 or region["state"] not in {"pending", "accepted", "rejected"}
             ):
                 raise ValueError("stale_recovery")
+        if value["schema"] == 1:
+            from .native_recovery_validation import validate_native
+
+            validate_native(value)
+        if _hash_file(Path(value["source_path"])) != value["source_sha256"]:
+            raise ValueError("stale_recovery")
         value["seal"] = seal
         return value
     except (OSError, ValueError, KeyError, TypeError):
@@ -245,6 +265,10 @@ def inspect_review(bundle: str | Path) -> dict[str, Any]:
 def review(bundle: str | Path, region_id: str, revision: str, decision: str) -> dict[str, Any]:
     """Explicit operator decision bound to a source/crop/OCR/settings revision."""
     target = Path(bundle).resolve()
+    try:
+        previous_bytes = target.read_bytes()
+    except OSError:
+        raise ValueError("stale_recovery") from None
     value = load_bundle(target)
     if decision not in {"accepted", "rejected", "pending"}:
         raise ValueError("invalid_review_state")
@@ -259,5 +283,11 @@ def review(bundle: str | Path, region_id: str, revision: str, decision: str) -> 
     )
     value.pop("seal")
     value["seal"] = _digest(_json(value).encode())
+    if value["schema"] == 2:
+        from .source_selection import publish_json
+
+        value.pop("seal")
+        publish_json(target, value, previous_bytes, "stale_recovery")
+        return inspect_review(target)
     _atomic_json(target, value)
     return _summary(value)

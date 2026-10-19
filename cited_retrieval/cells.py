@@ -11,13 +11,17 @@ from .core import _digest
 _rect: Any = pymupdf.Rect
 
 
-def native_cell(page: Any, box: Any) -> list[dict[str, Any]]:
+def native_cell(page: Any, box: Any, *, excluded: list[Any] | None = None) -> list[dict[str, Any]]:
     """Select whole glyph boxes even when a PDF line spans neighboring columns."""
     lines = []
     for block in page.get_text("rawdict", sort=True)["blocks"]:
         for line in block.get("lines", []):
             chars = [
-                c for span in line["spans"] for c in span["chars"] if box.contains(_rect(c["bbox"]))
+                c
+                for span in line["spans"]
+                for c in span["chars"]
+                if box.contains(_rect(c["bbox"]))
+                and not any(region.intersects(_rect(c["bbox"])) for region in excluded or [])
             ]
             text = "".join(c["c"] for c in chars)
             if text.strip():

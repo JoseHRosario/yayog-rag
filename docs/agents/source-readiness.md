@@ -33,6 +33,9 @@ Read it before changing extraction, chunking, eligibility or source-validation b
 - Preserve exercise continuations and variation relationships when that feature is in scope.
   Retaining an image reference does not mean a text-only model understands the image.
 - For exercise catalogs, use the [private layout/review workflow](../exercise-catalogs.md).
+  For independent prose paragraphs (including complete cross-page qualifications) and
+  explicit image-only text ROIs, use [reviewed source excerpts](../reviewed-source-excerpts.md).
+  Selected excerpts/accepted crops are not whole-page or semantic completeness approval.
   Select explicit parent/continuation/variation regions and field boxes; use exact unique
   quotes to split shared metadata lines. Never author replacement instructions. Default
   incomplete records to partial; accept only exact reviewed revisions with no unresolved

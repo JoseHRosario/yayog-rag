@@ -79,6 +79,8 @@ def _derive(
 
             blank_proofs, ignored_gaps = verify_blank_exclusions(doc, spec, recovered, fingerprint)
             gaps: list[Any] = []
+            selected_regions: set[str] = set()
+            raster_boundaries = []
             if spec.get("coverage", "partial") != "complete":
                 gaps.append("unverified_completeness")
             # Damage anywhere in the declared parent/continuation/variation region
@@ -89,6 +91,13 @@ def _derive(
                 if recovered is not None:
                     for gap_index, gap in enumerate(recovered["gaps"]):
                         if gap_index in ignored_gaps:
+                            continue
+                        if (
+                            gap.get("scope") == "outside_owned_blocks"
+                            and gap["pdf_page"] == boundary["pdf_page"]
+                        ):
+                            raster_boundaries.append((boundary, len(gaps)))
+                            gaps.append("unresolved_recovery")
                             continue
                         if gap["pdf_page"] == boundary["pdf_page"] and (
                             "bbox" not in gap or box.intersects(_rect_factory(gap["bbox"]))
@@ -134,6 +143,7 @@ def _derive(
                 node: dict[str, Any],
                 boundaries: list[dict[str, Any]] = boundaries,
                 gaps: list[Any] = gaps,
+                selected_regions: set[str] = selected_regions,
                 *,
                 require_name: bool = False,
             ) -> dict[str, Any]:
@@ -226,6 +236,9 @@ def _derive(
                             ):
                                 raise ValueError("invalid_exercise_layout")
                             text = text.replace(join, join.replace("-\n", ""), 1)
+                        from .raster_ownership import retained_regions
+
+                        selected_regions.update(retained_regions(selected, quote))
                         if not text.strip():
                             gaps.append("empty_field_selector")
                         segments.append(
@@ -309,6 +322,18 @@ def _derive(
                         segment["location"].update(
                             chapter=chapter, section_path=[chapter] if chapter else []
                         )
+            from .raster_ownership import owns_boundary
+
+            for boundary, gap_index in reversed(raster_boundaries):
+                assert recovered is not None
+                if owns_boundary(
+                    doc[boundary["pdf_page"] - 1],
+                    boundary["pdf_page"],
+                    _rect_factory(boundary["bbox"]),
+                    recovered,
+                    selected_regions,
+                ):
+                    del gaps[gap_index]
             record.update(
                 boundaries=boundaries, coverage="partial" if gaps else "complete", gaps=gaps
             )
@@ -346,11 +371,10 @@ def draft_exercises(
         raise ValueError("unsafe_review_path")
     preview = inspect_source(source, start, end)
     recovered = inspect_review(recovery) if recovery is not None else None
-    if recovered and (
-        recovered["source_sha256"] != preview["sha256"]
-        or recovered["section"] != preview["section"]
-    ):
-        raise ValueError("stale_recovery")
+    if recovered:
+        from .recovery_selection import recovery_selection
+
+        recovered = recovery_selection(recovered, preview["sha256"], start, end)
     binding = {
         "source_path": str(source),
         "source_sha256": preview["sha256"],

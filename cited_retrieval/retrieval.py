@@ -54,9 +54,18 @@ def search(
 
             if _hash_file(Path(source)) != meta["report"]["sha256"]:
                 raise ValueError("stale_source")
-        query = np.asarray(
-            _vectors(embedder, [question if question.strip() else str(programme)])[0]
-        )
+        try:
+            query = np.asarray(
+                _vectors(embedder, [question if question.strip() else str(programme)])[0]
+            )
+        except BaseException:
+            checked, checked_meta, _ = _load(index)
+            checked.close()
+            if checked_meta != meta:
+                raise ValueError("stale_corpus")
+            if embedder.identity != meta["report"]["model"]:
+                raise ValueError("incompatible_model")
+            raise
         if embedder.identity != meta["report"]["model"]:
             raise ValueError("incompatible_model")
         if len(query) != meta["report"]["dimensions"]:
@@ -188,6 +197,15 @@ def search(
         elif filtered:
             ranked = []
             ambiguous = []
+        if "excerpts" in meta["report"]:
+            seen_excerpts: set[str] = set()
+            unique_excerpts = []
+            for i in ranked:
+                rid = json.loads(records[i][0])["excerpt"]["id"]
+                if rid not in seen_excerpts:
+                    unique_excerpts.append(i)
+                    seen_excerpts.add(rid)
+            ranked = unique_excerpts
         ranked = ranked[:limit]
         passages = [
             {
@@ -217,11 +235,21 @@ def search(
                 ),
                 key=lambda p: (p["location"]["pdf_page"], p["location"]["ordinal"]),
             )
+            if "excerpts" in meta["report"]:
+                matched_records = {p["excerpt"]["id"] for p in passages}
+                unique_context: dict[str, dict[str, Any]] = {}
+                for passage in page_context:
+                    rid = passage["excerpt"]["id"]
+                    if rid not in matched_records and rid not in unique_context:
+                        unique_context[rid] = passage
+                page_context = list(unique_context.values())
         if "recovery" in meta["report"]:
             _validate_recovery(meta["report"]["recovery"])
         # Revalidate the complete dependency graph after inference, including source changes.
-        checked, _, _ = _load(index)
+        checked, checked_meta, _ = _load(index)
         checked.close()
+        if checked_meta != meta:
+            raise ValueError("stale_corpus")
         return {
             "status": "ambiguous" if ambiguous else "evidence" if passages else "no_evidence",
             **({"candidates": ambiguous} if ambiguous else {}),
@@ -234,6 +262,22 @@ def search(
             ),
             "source_id": meta["report"]["sha256"],
             "model": meta["report"]["model"],
+            **(
+                {
+                    "excerpt_coverage": {
+                        "records": [
+                            {
+                                k: r[k]
+                                for k in ("id", "revision", "state", "eligible", "coverage", "gaps")
+                            }
+                            for r in meta["report"]["excerpts"]["records"]
+                        ],
+                        "warning": "Operator-selected excerpts are not whole-page or semantic completeness proof.",
+                    }
+                }
+                if "excerpts" in meta["report"]
+                else {}
+            ),
             **(
                 {
                     "coverage": {

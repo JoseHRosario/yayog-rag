@@ -13,6 +13,8 @@ whole-source semantic correctness or real-model acceptance. Hosted databases and
 are not included.
 See [Exercise catalogs](docs/exercise-catalogs.md) and
 [Programme sessions](docs/programme-sessions.md) for private layout schemas and commands.
+See [Reviewed source excerpts](docs/reviewed-source-excerpts.md) for individually reviewed
+native paragraphs, contained imports from full recovery bundles, and opt-in image-text ROIs.
 See [Grounded answers](docs/grounded-answers.md) for `answer`, `prepare-answer`,
 `finish-answer`, and the portable owner-run Windows client (standard library only).
 
@@ -141,7 +143,9 @@ resources: region checks disable CID fallback to avoid OCRing healthy same-famil
 A completely white rendered spacing crop is retained as audited blank layout, not sent to
 OCR; its original/raw extraction remains in the bundle. Detection remains heuristic:
 plausible wrong words can escape it. Blank/scanned pages without native text regions remain reported gaps;
-this command does not attempt full-page OCR or exercise-layout reconstruction.
+the default command does not attempt full-page OCR or exercise-layout reconstruction.
+Explicit image-only text rectangles can instead opt into `--image-regions`; see
+[the ROI workflow](docs/reviewed-source-excerpts.md#explicit-image-only-text-rois).
 
 The private JSON bundle contains readable native lines, original damaged extraction and
 raw text, one-based physical PDF pages, coordinates, crop references/SHA-256, verbatim OCR,

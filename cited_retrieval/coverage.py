@@ -84,6 +84,7 @@ def draft_coverage(
     exercise_catalogs: list[str | Path] | None = None,
     programme_catalogs: list[str | Path] | None = None,
     recovery_bundles: list[str | Path] | None = None,
+    excerpt_catalogs: list[str | Path] | None = None,
     inventory: str | Path | None = None,
 ) -> dict[str, Any]:
     """Create an unresolved full-source operator manifest, outside the repository."""
@@ -99,6 +100,7 @@ def draft_coverage(
             ("index", indexes),
             ("exercise", exercise_catalogs),
             ("programme", programme_catalogs),
+            ("excerpt", excerpt_catalogs),
             ("recovery", recovery_bundles),
         )
         for p in paths or []

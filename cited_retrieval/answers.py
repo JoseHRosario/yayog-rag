@@ -69,7 +69,7 @@ def _disclosures(retrieval: dict[str, Any]) -> dict[str, Any]:
         "unresolved_references": unresolved,
         **{
             k: retrieval[k]
-            for k in ("coverage", "exercise_coverage", "candidates")
+            for k in ("coverage", "exercise_coverage", "excerpt_coverage", "candidates")
             if k in retrieval
         },
     }
@@ -386,6 +386,7 @@ def _error_code(exc: Exception) -> str:
         "stale_corpus",
         "stale_recovery",
         "stale_exercises",
+        "stale_excerpts",
         "stale_programmes",
         "stale_settings",
         "invalid_query",

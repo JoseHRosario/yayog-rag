@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from .core import _hash_file, _load, report
+from .excerpts import inspect_excerpts
+from .excerpts import protected_artifacts as excerpt_artifacts
 from .exercises import inspect_exercises
 from .programmes import inspect_programmes, programme_passages, protected_artifacts
 from .recovery import inspect_review
@@ -35,10 +37,18 @@ def snapshot(specs: list[dict[str, str]], source_sha256: str) -> dict[str, Any]:
                     "settings": result["settings"],
                 }
             )
-            for key, catalog_kind in (("exercises", "exercise"), ("programmes", "programme")):
+            for key, catalog_kind in (
+                ("exercises", "exercise"),
+                ("programmes", "programme"),
+                ("excerpts", "excerpt"),
+            ):
                 if key in result:
                     catalogs[Path(result[key]["catalog_path"]).resolve()] = catalog_kind
-            if "exercises" not in result and "programmes" not in result:
+            if (
+                "exercises" not in result
+                and "programmes" not in result
+                and "excerpts" not in result
+            ):
                 db, _, rows = _load(path)
                 db.close()
                 for payload, _ in rows:
@@ -68,7 +78,7 @@ def snapshot(specs: list[dict[str, str]], source_sha256: str) -> dict[str, Any]:
                 files.update((recovery.parent / r["crop"]).resolve() for r in recovered["regions"])
         elif kind == "recovery":
             recoveries.add(path)
-        elif kind in {"exercise", "programme"}:
+        elif kind in {"exercise", "programme", "excerpt"}:
             catalogs[path] = kind
         else:
             raise ValueError("invalid_coverage_manifest")
@@ -80,10 +90,18 @@ def snapshot(specs: list[dict[str, str]], source_sha256: str) -> dict[str, Any]:
         if path in visited:
             continue
         visited.add(path)
-        catalog = inspect_exercises(path) if kind == "exercise" else inspect_programmes(path)
+        catalog = (
+            inspect_excerpts(path)
+            if kind == "excerpt"
+            else inspect_exercises(path)
+            if kind == "exercise"
+            else inspect_programmes(path)
+        )
         binding = catalog["binding"]
         files.add(path)
-        files.update(protected_artifacts(binding))
+        files.update(
+            excerpt_artifacts(binding) if kind == "excerpt" else protected_artifacts(binding)
+        )
         if binding.get("recovery_path"):
             recoveries.add(Path(binding["recovery_path"]).resolve())
         for dependency in binding.get("exercise_catalogs", []):
@@ -98,7 +116,7 @@ def snapshot(specs: list[dict[str, str]], source_sha256: str) -> dict[str, Any]:
             records.append(
                 {
                     "key": str(path) + "#" + record["id"],
-                    "kind": record.get("kind", "exercise"),
+                    "kind": record.get("kind", "excerpt" if kind == "excerpt" else "exercise"),
                     "source_sha256": binding["source_sha256"],
                     "pdf_pages": sorted({b["pdf_page"] for b in record["boundaries"]}),
                     "revision": record["revision"],
